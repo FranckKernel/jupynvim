@@ -90,8 +90,9 @@ end
 local _ol_cache = setmetatable({}, { __mode = "k" })
 
 -- Cheap, content-derived key: O(#outputs) length lookups, no string scanning.
--- Covers every way outputs actually change - replaced wholesale (identity),
--- appended to by a stream event (text length), or added to (count).
+-- Within one output list, streams append text, new outputs change the count,
+-- and display-handle updates bump _rev. output_lines also checks the list's
+-- identity: a rerun can replace it with different text of the same length.
 local function _out_key(cell)
   local p = { M.max_output_lines, M._output_expanded[cell.id] and 1 or 0 }
   for _, o in ipairs(cell.outputs or {}) do
@@ -111,7 +112,10 @@ end
 function M.output_lines(cell)
   local key = _out_key(cell)
   local hit = _ol_cache[cell]
-  if hit and hit.key == key then return hit.lines end
+  -- A fast run can clear and refill outputs before the debounced render
+  -- observes the empty list. Lengths alone then match the previous run and
+  -- would keep displaying its result even though the kernel returned a new one.
+  if hit and hit.outputs == cell.outputs and hit.key == key then return hit.lines end
 
   local lines = {}
   local function add_text(text)
@@ -186,7 +190,7 @@ function M.output_lines(cell)
     lines = shown
   end
 
-  _ol_cache[cell] = { key = key, lines = lines }
+  _ol_cache[cell] = { outputs = cell.outputs, key = key, lines = lines }
   return lines
 end
 
