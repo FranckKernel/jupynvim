@@ -71,12 +71,16 @@ end
 -- DISPLAY ONLY: sync_from_buffer skips the output region entirely and saves
 -- read cell.outputs from the model, so nothing is lost from the .ipynb.
 M.max_output_lines = 500
+-- A cut output shows its first lines and this many of its last, as VS Code
+-- cuts one, so the end of a log or a closing error stays in view.
+M.OUTPUT_TAIL = 5
 
 -- How a cell shows its outputs is kept on the cell table, so each notebook has
 -- its own even when two hold the same cell ids, as a copied .ipynb does. A
 -- save sends only ids, types and sources, so none of it reaches the file.
 --   cell._output_expanded  shows all of an output the cap cuts, <leader>no
 --   cell._output_hidden    shows one line for the whole output, <leader>nO
+--   cell._output_limit     how many first lines show, for this cell, <leader>nl
 -- Render puts the key to press after a marker line instead of in its text, so
 -- the buffer, and the undo file written from it, stay the same when keymaps
 -- change.
@@ -95,7 +99,8 @@ local _ol_cache = setmetatable({}, { __mode = "k" })
 -- identity, since a rerun can replace it with different text of the same
 -- length.
 local function _out_key(cell)
-  local p = { M.max_output_lines, cell._output_expanded and 1 or 0, cell._output_hidden and 1 or 0 }
+  local p = { M.max_output_lines, cell._output_limit or 0, cell._output_expanded and 1 or 0,
+              cell._output_hidden and 1 or 0 }
   for _, o in ipairs(cell.outputs or {}) do
     local t, d = o.text, o.data
     p[#p + 1] = (o.output_type or "?") .. (o._rev or "")
@@ -119,12 +124,12 @@ end
 -- cut any lines, and how many lines the outputs have in all. `expanded`
 -- shows every line.
 local function build(cell, expanded)
-  local cap = not expanded and M.max_output_lines or nil
+  local cap = not expanded and (cell._output_limit or M.max_output_lines) or nil
   local head, tail, fit
   if cap and cap > 0 then
-    head = math.max(1, math.floor(cap / 4))
-    tail = math.max(1, cap - head - 1)   -- -1: the marker occupies a line
-    fit = head + tail + 1                -- the cap, or 3 when it is below 3
+    head = math.floor(cap)
+    tail = M.OUTPUT_TAIL
+    fit = head + tail + 1   -- past this a cut hides 2 lines or more, never 1
   end
 
   local outputs = cell.outputs or {}
@@ -226,8 +231,8 @@ local function build(cell, expanded)
   local marks = {}
   for row in pairs(hides) do marks[row] = true end
 
-  -- Anything still over the cap (many outputs, or non-stream) is trimmed here,
-  -- keeping BOTH ends: for a training log the final epochs are the point.
+  -- Anything still over the cap (many outputs, or non-stream) is trimmed here
+  -- the same way, the first lines and the last few.
   if fit and #lines > fit then
     local shown = {}
     for k = 1, head do shown[#shown + 1] = lines[k] end
@@ -298,6 +303,12 @@ function M.output_cut(cell)
   if not (cell._output_expanded or cell._output_hidden) then return cached(cell).cut end
   local _, _, cut = build(cell, false)
   return cut
+end
+
+-- How many lines the cell's outputs have in all, shown or not.
+function M.output_count(cell)
+  local _, _, _, n = build(cell, false)
+  return n
 end
 
 -- Does the cell show anything for its outputs, a line or an image? Then

@@ -142,20 +142,20 @@ do
   end
 
   local rows = region(buf, "long")
-  chk("a 1000-line print is cut to the cap", #rows == 500, #rows .. " rows")
+  chk("a 1000-line print shows its first 500 lines, a marker and the last 5", #rows == 506, #rows .. " rows")
   chk("the marker says how many lines it hides, of how many",
-      rows[126] == "  ⋯ 501 lines hidden (1000 total)", rows[126])
+      rows[501] == "  ⋯ 495 lines hidden (1000 total)", rows[501])
   chk("it hides exactly those lines",
-      rows[125] == "  long line 125" and rows[127] == "  long line 627" and rows[500] == "  long line 1000",
-      ("%s / %s / %s"):format(rows[125], rows[127], rows[500]))
+      rows[500] == "  long line 500" and rows[502] == "  long line 996" and rows[506] == "  long line 1000",
+      ("%s / %s / %s"):format(rows[500], rows[502], tostring(rows[506])))
   chk("the key to press follows the marker, outside the text",
-      hint(buf, range(buf, "long").out_sep + 126) == " <leader>no to expand",
-      tostring(hint(buf, range(buf, "long").out_sep + 126)))
+      hint(buf, range(buf, "long").out_sep + 501) == " <leader>no to expand",
+      tostring(hint(buf, range(buf, "long").out_sep + 501)))
 
   chk("<leader>no expands it", expand(buf, "long") == "jupynvim: output expanded", said())
   rows = region(buf, "long")
   chk("all 1000 lines show", #rows == 1000 and rows[1000] == "  long line 1000", #rows .. " rows")
-  chk("<leader>no again cuts it", expand(buf, "long") == "jupynvim: output collapsed" and #region(buf, "long") == 500)
+  chk("<leader>no again cuts it", expand(buf, "long") == "jupynvim: output collapsed" and #region(buf, "long") == 506)
 
   -- ── <leader>nO hides the whole output, a plot included ─────────────────
   chk("<leader>nO hides the plot", hide(buf, "plot") == "jupynvim: output hidden", said())
@@ -175,7 +175,7 @@ do
   chk("<leader>nO hides a long print", hide(buf, "long") == "jupynvim: output hidden")
   rows = region(buf, "long")
   chk("and counts its lines", #rows == 1 and rows[1] == "  ⋯ output hidden (1000 lines)", vim.inspect(rows))
-  chk("shown again, it is cut as before", hide(buf, "long") == "jupynvim: output shown" and #region(buf, "long") == 500)
+  chk("shown again, it is cut as before", hide(buf, "long") == "jupynvim: output shown" and #region(buf, "long") == 506)
   expand(buf, "long"); hide(buf, "long"); hide(buf, "long")
   chk("an expanded output comes back expanded", #region(buf, "long") == 1000)
   expand(buf, "long")
@@ -235,7 +235,7 @@ do
   write_nb(p, 3000)
   buf = open(p)
   chk("opened on a file changed since the save, the long print is cut",
-      #(region(buf, "long") or {}) == 500 and not cell(buf, "long")._output_expanded,
+      #(region(buf, "long") or {}) == 506 and not cell(buf, "long")._output_expanded,
       #(region(buf, "long") or {}) .. " rows")
   chk("and the plot shows", not cell(buf, "plot")._output_hidden and region(buf, "plot") == nil)
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
@@ -261,7 +261,7 @@ do
   event(buf, "long", { kind = "stream", name = "stdout", text = printed(3000) })
   synced()
   chk("a new run cuts an expanded output again",
-      #region(buf, "long") == 500 and not cell(buf, "long")._output_expanded, #region(buf, "long") .. " rows")
+      #region(buf, "long") == 506 and not cell(buf, "long")._output_expanded, #region(buf, "long") .. " rows")
 
   -- cleared within the same run, it prints something short
   expand(buf, "long")
@@ -298,6 +298,9 @@ do
   chk("hiding in one copy leaves the other as it was", #NB.output_lines(cell(bb, "short")) == short_rows)
   expand(ba, "long")
   chk("and so does cutting it again", #NB.output_lines(cell(bb, "long")) == long_rows)
+  on(ba, "long"); J.limit_output(ba, 100)
+  chk("a number of lines in one copy leaves the other as it was",
+      #NB.output_lines(cell(ba, "long")) == 106 and #NB.output_lines(cell(bb, "long")) == long_rows)
   -- the images too: owned by the cell id alone, hiding the plot in one copy
   -- freed the other copy's
   chk("the other copy's plot is in the terminal", plot_sent(true, bb))
@@ -323,7 +326,7 @@ do
   vim.bo[buf].modifiable = true
   vim.cmd("silent undo 0")
   changed(buf)
-  chk("after :undo 0 the long print shows cut", #(region(buf, "long") or {}) == 500,
+  chk("after :undo 0 the long print shows cut", #(region(buf, "long") or {}) == 506,
       #(region(buf, "long") or {}) .. " rows")
   local msg = hide(buf, "empty")
   chk("<leader>nO on the cell below it acts on that cell", msg == "jupynvim: nothing to hide", tostring(msg))
@@ -352,6 +355,76 @@ do
   Image.clear_all()
 end
 
+-- ── <leader>nl gives a cell its own number of lines ─────────────────────
+do
+  local p = tmp .. "/limit.ipynb"
+  write_nb(p)
+  local buf = open(p)
+  local real_input = vim.ui.input
+  local asked
+  vim.ui.input = function(opts, cb) asked = opts.prompt; cb("100") end
+  on(buf, "long"); J.limit_output(buf)
+  vim.ui.input = real_input
+  chk("<leader>nl asks how many lines, saying how many show now", asked == "Show how many lines (now 500)? ",
+      tostring(asked))
+  chk("and says what it did", said() == "jupynvim: output cut to its first 100 lines", said())
+  local rows = region(buf, "long")
+  chk("the output shows its first 100 lines, a marker and the last 5", #rows == 106
+      and rows[100] == "  long line 100" and rows[101] == "  ⋯ 895 lines hidden (1000 total)"
+      and rows[106] == "  long line 1000", #rows .. " rows")
+  chk("the key to expand follows its marker", hint(buf, range(buf, "long").out_sep + 101) == " <leader>no to expand")
+  chk("<leader>no then shows every line",
+      expand(buf, "long") == "jupynvim: output expanded" and #region(buf, "long") == 1000)
+  chk("and cuts back to the cell's 100",
+      expand(buf, "long") == "jupynvim: output collapsed" and #region(buf, "long") == 106)
+  vim.ui.input = function(opts, cb) asked = opts.prompt; cb(nil) end
+  local before = text(buf)
+  on(buf, "long"); J.limit_output(buf)
+  vim.ui.input = real_input
+  chk("asked again, it says the cell's number", asked == "Show how many lines (now 100)? ", tostring(asked))
+  chk("and cancelling changes nothing", text(buf) == before and cell(buf, "long")._output_limit == 100)
+  for _, bad in ipairs({ "abc", "0", "-3", "1.5" }) do
+    on(buf, "long"); J.limit_output(buf, bad)
+    chk(("%q is refused"):format(bad), said() == "jupynvim: give a whole number of lines, like 100"
+        and cell(buf, "long")._output_limit == 100, said())
+  end
+
+  on(buf, "short"); J.limit_output(buf, 50)
+  chk("a number past a short output cuts nothing, and says so",
+      said() == "jupynvim: nothing to cut, it has 5 lines" and #region(buf, "short") == 5, said())
+  on(buf, "empty"); J.limit_output(buf, 50)
+  chk("a cell with no output keeps the number for its next one", said() == "jupynvim: nothing to cut yet"
+      and cell(buf, "empty")._output_limit == 50, said())
+  on(buf, "how"); J.limit_output(buf, 50)
+  chk("a markdown cell has no output to cut", said() == "jupynvim: not a code cell", said())
+  hide(buf, "long")
+  on(buf, "long"); J.limit_output(buf, 200)
+  chk("a number shows a hidden output again, cut to it", not cell(buf, "long")._output_hidden
+      and #region(buf, "long") == 206, #region(buf, "long") .. " rows")
+  changed(buf)
+  chk("none of it marks the notebook modified", not vim.bo[buf].modified)
+
+  -- what a save keeps
+  vim.api.nvim_buf_call(buf, function() vim.cmd("silent write") end)
+  vim.wait(3000, function() return not vim.bo[buf].modified end, 20)
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  Image.clear_all()
+  buf = open(p)
+  chk("reopened, the cell keeps its number", cell(buf, "long")._output_limit == 200
+      and #(region(buf, "long") or {}) == 206, #(region(buf, "long") or {}) .. " rows")
+  local ut = vim.api.nvim_buf_call(buf, vim.fn.undotree)
+  chk("and the undo history is read back", #ut.entries > 0)
+
+  -- These events reach the cells here but not the backend, so nothing is
+  -- saved after them.
+  event(buf, "long", { kind = "execute_input", execution_count = 2 })
+  event(buf, "long", { kind = "stream", name = "stdout", text = printed(3000) })
+  synced()
+  chk("a new run keeps the cell's number", #region(buf, "long") == 206, #region(buf, "long") .. " rows")
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  Image.clear_all()
+end
+
 -- ── the keys ─────────────────────────────────────────────────────────────
 do
   local p = tmp .. "/keys.ipynb"
@@ -366,6 +439,9 @@ do
   chk("and passes it by while it is hidden",
       CM.cell_idx_at(buf, vim.api.nvim_win_get_cursor(0)[1]) ~= idx(buf, "plot"))
   hide(buf, "plot")
+  local ml = vim.fn.maparg("<leader>nl", "n", false, true)
+  chk("<leader>nl is bound in a notebook", ml.buffer == 1 and ml.desc == "Show N lines of cell output",
+      vim.inspect(ml.desc))
   local m = vim.fn.maparg("<leader>nO", "n", false, true)
   chk("<leader>nO is bound in a notebook", m.buffer == 1 and m.desc == "Hide/show cell output", vim.inspect(m.desc))
   chk("the hint key is the default one", K.lhs_for("hide_output", {}) == "<leader>nO")

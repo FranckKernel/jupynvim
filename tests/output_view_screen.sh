@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# <leader>no and <leader>nO with real keys in a real nvim under tmux, #37.
+# <leader>no, <leader>nO and <leader>nl with real keys in a real nvim under
+# tmux, #37.
 # What each says where it has nothing to do, the line a hidden output leaves,
 # :q after either, and u after a restart when the save had an output
 # expanded or hidden.
@@ -136,6 +137,28 @@ case_3() {
   k G; k Enter; k u; k Escape; k Escape
   save
   holds "u after a restart takes back the edit saved with an output hidden" '[ "$(saved_src edit)" = "a3 = 3" ]'
+}
+
+# <leader>nl asks how many lines, and the answer typed at the prompt cuts the
+# output to its first lines and its last 5.
+case_4() {
+  start_views
+  k j
+  press Space n l
+  holds "<leader>nl asks how many lines" 'screen | grep -q "Show how many lines (now 500)?"'
+  type_text "100"; k Enter
+  holds "the answer cuts the output to its first 100 lines" 'said "jupynvim: output cut to its first 100 lines"'
+  holds "the notebook stays unmodified" '[ "$(modified)" = "false" ]'
+  k "/895 lines hidden" Enter
+  holds "line 100, then the marker with its key" \
+    'screen | grep -A1 "long line 100$" | grep -q "⋯ 895 lines hidden (1000 total)  <leader>no to expand"'
+  holds "then the last 5 lines" 'screen | grep -A1 "895 lines hidden" | grep -q "long line 996$"'
+  press Space n o
+  holds "<leader>no then shows every line" \
+    'said "jupynvim: output expanded" && [ "$(rec "vim.api.nvim_buf_line_count(0)")" -ge 1000 ]'
+  press Space n o
+  holds "and cuts back to 100" \
+    'said "jupynvim: output collapsed" && [ "$(rec "vim.api.nvim_buf_line_count(0)")" -lt 200 ]'
 }
 
 run_cases "$@"

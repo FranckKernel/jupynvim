@@ -75,8 +75,9 @@ M.config = {
   -- output is untouched: the .ipynb keeps everything and save is lossless, this
   -- only bounds what treesitter and every other FileType plugin has to parse.
   -- One `!tree` of a dataset directory otherwise puts 24k live lines in the
-  -- buffer and costs 2s of frozen UI on open. Head and tail are both kept, so
-  -- a training log still shows its final epochs. 0 disables the cap.
+  -- buffer and costs 2s of frozen UI on open. A longer output shows its first
+  -- max_output_lines lines and its last 5, so a training log still shows how
+  -- it ended. <leader>nl sets another number for one cell. 0 disables the cap.
   max_output_lines = 500,
 
   -- When an SSH session is active, these keys open the REMOTE tree explorer
@@ -1398,18 +1399,19 @@ end
 
 -- Written with the undo file on every save: how far back that history
 -- belongs to the cell list saved with it, which of its steps are the
--- plugin's own rewrites, and which outputs showed expanded or hidden. The
--- undo file itself cannot say.
+-- plugin's own rewrites, and which outputs showed expanded, hidden or cut to
+-- their own number of lines. The undo file itself cannot say.
 function M._note_history(nb, uf)
   local ut = vim.api.nvim_buf_call(nb.buf, vim.fn.undotree)
   local floor = nb._ck_nr or 0
   local rw = {}
   for k in pairs(nb._rewrites or {}) do if k >= floor then rw[#rw + 1] = k end end
   table.sort(rw)
-  local views = { expanded = {}, hidden = {} }
+  local views = { expanded = {}, hidden = {}, limits = vim.empty_dict() }
   for _, c in ipairs(nb.cells) do
     if c._output_expanded then table.insert(views.expanded, c.id) end
     if c._output_hidden then table.insert(views.hidden, c.id) end
+    if c._output_limit then views.limits[c.id] = c._output_limit end
   end
   local path = history_note(uf)
   pcall(vim.fn.mkdir, vim.fn.fnamemodify(path, ":h"), "p")
@@ -1420,8 +1422,8 @@ function M._note_history(nb, uf)
   f:close()
 end
 
--- Expand and hide the outputs the last save had expanded or hidden, before
--- the first populate. Vim reads an undo file back only onto the very text it
+-- Show the outputs as the last save showed them, expanded, hidden or cut to
+-- their own number of lines, before the first populate. Vim reads an undo file back only onto the very text it
 -- was written from, and output rows are text. Opened cut or shown, a notebook
 -- saved with an output expanded or hidden lost its undo history.
 function M._restore_views(nb, uf)
@@ -1434,17 +1436,22 @@ function M._restore_views(nb, uf)
     return s
   end
   local expanded, hidden = set(views.expanded), set(views.hidden)
+  local limits = type(views.limits) == "table" and views.limits or {}
   local any = false
   for _, c in ipairs(nb.cells) do
     c._output_expanded = expanded[c.id]
     c._output_hidden = hidden[c.id]
-    any = any or expanded[c.id] or hidden[c.id] or false
+    local n = tonumber(limits[c.id])
+    c._output_limit = n and n >= 1 and n % 1 == 0 and n or nil
+    any = any or expanded[c.id] or hidden[c.id] or c._output_limit ~= nil
   end
   -- Worth it only on the very text the undo file was written from. Kept on a
   -- file changed since, an expanded output stayed uncut through whatever
   -- prints under that cell id now.
   if any and note.hash ~= vim.fn.sha256(table.concat((nb:to_lines()), "\n")) then
-    for _, c in ipairs(nb.cells) do c._output_expanded, c._output_hidden = nil, nil end
+    for _, c in ipairs(nb.cells) do
+      c._output_expanded, c._output_hidden, c._output_limit = nil, nil, nil
+    end
   end
 end
 
@@ -2836,6 +2843,35 @@ function M.toggle_output_hidden(buf)
   end
   redraw_view(nb, cell)
   say(cell._output_hidden and "output hidden" or "output shown")
+end
+
+-- Ask how many first lines the output under the cursor shows, and show those
+-- and its last few, or show `n` when given. The number stays with the cell
+-- through runs and saves, and <leader>no toggles between it and every line.
+function M.limit_output(buf, n)
+  local nb, cell = cursor_cell(buf)
+  if not cell then return end
+  if cell.cell_type ~= "code" then say("not a code cell"); return end
+  local function apply(text)
+    text = vim.trim(tostring(text or ""))
+    if text == "" then return end   -- the prompt was left empty or cancelled
+    local want = tonumber(text)
+    if not want or want < 1 or want % 1 ~= 0 then
+      say("give a whole number of lines, like 100")
+      return
+    end
+    cell._output_limit, cell._output_expanded, cell._output_hidden = want, nil, nil
+    redraw_view(nb, cell)
+    -- the first lines and the last few can cover a short output whole
+    local total = Notebook.output_count(cell)
+    say(Notebook.output_cut(cell) and ("output cut to its first " .. want .. " lines")
+      or total == 0 and "nothing to cut yet"
+      or ("nothing to cut, it has %d line%s"):format(total, total == 1 and "" or "s"))
+  end
+  if n then return apply(n) end
+  local now = cell._output_limit or Notebook.max_output_lines
+  vim.ui.input({ prompt = ("Show how many lines%s? "):format(now > 0 and (" (now " .. now .. ")") or "") },
+    apply)
 end
 
 -- Compatibility shim for the old name; defaults to "down" direction.

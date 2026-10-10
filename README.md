@@ -389,13 +389,16 @@ there.
 | `]i` or `[i` | Jump to next or prev cell with an image |
 | `<leader>no` | Show all of an output cut at `max_output_lines`, or cut it again |
 | `<leader>nO` | Hide a cell's whole output, plots included, or show it again |
+| `<leader>nl` | Set how many lines of a cell's output show. It asks for the number |
 | `gx` | Open the link under the cursor |
 
-Expanding and hiding change only the view. The `.ipynb` keeps every output
-and the notebook isn't marked modified. A hidden output stays hidden when its
-cell runs again, while a new run cuts an expanded one back to the cap. A
-notebook you save reopens with the same outputs expanded or hidden, unless
-the file changed since.
+A long output shows its first `max_output_lines` lines and its last 5, with
+a marker between them. `<leader>nl` gives one cell its own number, and
+`<leader>no` then toggles between that and every line. All of these change
+only the view. The `.ipynb` keeps every output and the notebook isn't marked
+modified. A hidden output and a cell's own number stay when the cell runs
+again, while a new run cuts an expanded output back. A notebook you save
+reopens with its outputs shown the same way, unless the file changed since.
 
 ### Kernel control
 
@@ -429,9 +432,10 @@ require("jupynvim").setup({
   image_rows = 16,
   image_cols = 48,
 
-  -- Longest output rendered per cell. A longer one shows its head and tail
-  -- with a marker between them, and <leader>no expands it. The .ipynb keeps
-  -- everything. 0 renders all of it.
+  -- How many lines of an output show. A longer one shows its first
+  -- max_output_lines lines and its last 5, with a marker between them, and
+  -- <leader>no expands it. <leader>nl sets another number for one cell. The
+  -- .ipynb keeps everything. 0 renders all of it.
   max_output_lines = 500,
 
   -- Override the path to the jupynvim-core binary. Auto-detected from the
