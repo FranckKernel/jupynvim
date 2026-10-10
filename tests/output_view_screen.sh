@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# <leader>no with real keys in a real nvim under tmux, #37. What it says
-# where it has nothing to do, :q after it, and u after a restart when the
-# save had an output expanded.
+# <leader>no and <leader>nO with real keys in a real nvim under tmux, #37.
+# What each says where it has nothing to do, the line a hidden output leaves,
+# :q after either, and u after a restart when the save had an output
+# expanded or hidden.
 #
 # Two of these need the real main loop. TextChanged compares the buffer with
 # the file, and used to mark a notebook modified when only its view changed.
@@ -74,11 +75,22 @@ print("".join(next(c["source"] for c in nb["cells"] if c["id"] == sys.argv[2])))
 PY
 }
 
-# Where nothing is cut, the key says so and leaves the notebook as it was.
+# Where nothing is cut or there is no output, each key says so and leaves
+# the notebook as it was. Hiding leaves one line with the key to show it.
 case_1() {
   start_views
   press Space n o
   holds "<leader>no on a plot says there is nothing to expand" 'said "jupynvim: nothing to expand"'
+  press Space n O
+  holds "<leader>nO hides the plot" 'said "jupynvim: output hidden"'
+  holds "one line says what is hidden, with the key to show it" \
+    'screen | grep -q "⋯ output hidden (1 image)  <leader>nO to show"'
+  holds "hiding leaves the notebook unmodified" '[ "$(modified)" = "false" ]'
+  press Space n o
+  holds "<leader>no on a hidden output points at <leader>nO" \
+    'said "jupynvim: output is hidden, <leader>nO shows it"'
+  press Space n O
+  holds "<leader>nO shows it again" 'said "jupynvim: output shown" && ! screen | grep -q "output hidden"'
   k j
   press Space n o
   holds "<leader>no expands the long print" 'said "jupynvim: output expanded"'
@@ -86,6 +98,9 @@ case_1() {
   holds "expanding leaves the notebook unmodified" '[ "$(modified)" = "false" ]'
   press Space n o
   holds "<leader>no cuts it again" 'said "jupynvim: output collapsed"'
+  k j
+  press Space n O
+  holds "<leader>nO with no output says there is nothing to hide" 'said "jupynvim: nothing to hide"'
   k ":q" Enter
   sleep 1
   holds ":q after all of it quits, with nothing to save" '! screen | grep -q "E37" && ! tmux capture-pane -t "$S" -p | grep -q "plot_it()"'
@@ -106,6 +121,21 @@ case_2() {
   k G; k Enter; k u; k Escape; k Escape
   save
   holds "u after a restart takes back the edit saved with an output expanded" '[ "$(saved_src edit)" = "a3 = 3" ]'
+}
+
+# The same with the plot hidden, which also comes back hidden.
+case_3() {
+  start_views
+  k G; k Enter; k A; type_text "  # edited"; k Escape; k Escape
+  k g g
+  press Space n O
+  save
+  k ":qa!" Enter; sleep 1.5
+  launch_views
+  holds "reopened, the plot is still hidden" 'screen | grep -q "⋯ output hidden (1 image)"'
+  k G; k Enter; k u; k Escape; k Escape
+  save
+  holds "u after a restart takes back the edit saved with an output hidden" '[ "$(saved_src edit)" = "a3 = 3" ]'
 }
 
 run_cases "$@"

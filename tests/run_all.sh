@@ -23,7 +23,7 @@
 #      + install_spec.lua (installing the binary without lazy.nvim, #33)
 #      + output_cache_spec.lua (equal-length output after fast reruns)
 #      + stale_output_e2e.lua (redefine a function and rerun its unchanged caller)
-#      + output_view_spec.lua (outputs cut or expanded, #37)
+#      + output_view_spec.lua (outputs cut, expanded or hidden, #37)
 #   5. frame_layout.sh (real rendered screen via tmux: frame alignment across
 #      terminal-split / floating-window layout changes)
 #      remote_hl_screen.sh (real rendered screen via tmux: dashboard/explorer
@@ -33,8 +33,8 @@
 #      boundary, and what :w saves)
 #      undo_screen.sh (real nvim via tmux: undo and redo around outputs, cell
 #      moves and the history an open reads back)
-#      output_view_screen.sh (real nvim via tmux: <leader>no, :q after it,
-#      and u after a restart with an output expanded)
+#      output_view_screen.sh (real nvim via tmux: <leader>no and <leader>nO,
+#      :q after them, and u after a restart with an output expanded or hidden)
 #
 # All must pass for the suite to succeed.
 

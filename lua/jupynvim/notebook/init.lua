@@ -76,6 +76,7 @@ M.max_output_lines = 500
 -- its own even when two hold the same cell ids, as a copied .ipynb does. A
 -- save sends only ids, types and sources, so none of it reaches the file.
 --   cell._output_expanded  shows all of an output the cap cuts, <leader>no
+--   cell._output_hidden    shows one line for the whole output, <leader>nO
 -- Render puts the key to press after a marker line instead of in its text, so
 -- the buffer, and the undo file written from it, stay the same when keymaps
 -- change.
@@ -94,7 +95,7 @@ local _ol_cache = setmetatable({}, { __mode = "k" })
 -- identity, since a rerun can replace it with different text of the same
 -- length.
 local function _out_key(cell)
-  local p = { M.max_output_lines, cell._output_expanded and 1 or 0 }
+  local p = { M.max_output_lines, cell._output_expanded and 1 or 0, cell._output_hidden and 1 or 0 }
   for _, o in ipairs(cell.outputs or {}) do
     local t, d = o.text, o.data
     p[#p + 1] = (o.output_type or "?") .. (o._rev or "")
@@ -244,6 +245,22 @@ local function build(cell, expanded)
   return lines, marks, next(marks) ~= nil, total
 end
 
+-- A hidden output shows one line in its place saying what it holds, or
+-- nothing when the outputs show nothing anyway.
+local function stand_in(cell)
+  local _, _, _, n = build(cell, false)
+  local imgs = 0
+  for _, o in ipairs(cell.outputs or {}) do
+    local d = (o.output_type == "execute_result" or o.output_type == "display_data") and o.data
+    if d and (d["image/png"] or d["image/gif"] or d["image/jpeg"]) then imgs = imgs + 1 end
+  end
+  local what = {}
+  if imgs > 0 then what[#what + 1] = imgs .. (imgs == 1 and " image" or " images") end
+  if n > 0 then what[#what + 1] = n .. (n == 1 and " line" or " lines") end
+  if #what == 0 then return {} end
+  return { string.format("  %s output hidden (%s)", M.OUT_TRUNC_MARK, table.concat(what, ", ")) }
+end
+
 local function cached(cell)
   local key = _out_key(cell)
   local hit = _ol_cache[cell]
@@ -252,10 +269,15 @@ local function cached(cell)
   -- would keep displaying its result even though the kernel returned a new one.
   if hit and hit.outputs == cell.outputs and hit.key == key then return hit end
   local e = { key = key, outputs = cell.outputs }
-  local marks
-  e.lines, marks, e.cut = build(cell, cell._output_expanded)
-  e.marks = {}
-  for row in pairs(marks) do e.marks[row] = "cut" end
+  if cell._output_hidden then
+    e.lines = stand_in(cell)
+    e.marks = #e.lines > 0 and { [1] = "hidden" } or {}
+  else
+    local marks
+    e.lines, marks, e.cut = build(cell, cell._output_expanded)
+    e.marks = {}
+    for row in pairs(marks) do e.marks[row] = "cut" end
+  end
   _ol_cache[cell] = e
   return e
 end
@@ -264,8 +286,8 @@ function M.output_lines(cell)
   return cached(cell).lines
 end
 
--- The rows of output_lines(cell) that stand for lines the cap hides, as
--- row -> "cut".
+-- The rows of output_lines(cell) that stand for something not shown, as
+-- row -> "cut" for lines the cap hides or "hidden" for a hidden output.
 function M.output_marks(cell)
   return cached(cell).marks
 end
@@ -273,9 +295,15 @@ end
 -- Does the cap cut this cell's output when it is not expanded? Then
 -- <leader>no has lines to show, or to cut again.
 function M.output_cut(cell)
-  if not cell._output_expanded then return cached(cell).cut end
+  if not (cell._output_expanded or cell._output_hidden) then return cached(cell).cut end
   local _, _, cut = build(cell, false)
   return cut
+end
+
+-- Does the cell show anything for its outputs, a line or an image? Then
+-- <leader>nO has something to hide.
+function M.output_shows(cell)
+  return cell.cell_type == "code" and #stand_in(cell) > 0
 end
 
 -- "2026-06-12T21:38:05.123Z" -> epoch seconds (fractional). Both stamps
@@ -533,7 +561,8 @@ function Notebook:apply_cell_event(cell_id, ev)
     c.execution_count = ev.execution_count
     c.outputs = {}
     -- A new run is a new output, cut again. Kept on, expanding one long
-    -- print let the next run fill the buffer with whatever it printed.
+    -- print let the next run fill the buffer with whatever it printed. A
+    -- hidden output stays hidden, as JupyterLab keeps it collapsed.
     c._output_expanded = nil
     -- start the execution stopwatch (drives the VSCode-style "[1] ✓ 0.1s"
     -- bar; live elapsed while busy, frozen duration once idle)

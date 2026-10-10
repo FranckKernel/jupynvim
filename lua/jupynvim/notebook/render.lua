@@ -226,6 +226,9 @@ local OUT_INDENT = "  "
 -- output, so a bundle carrying both animates.
 local function image_outputs(nb, cell)
   local list = {}
+  -- a hidden output shows no image and holds none in the terminal, where a
+  -- gif would go on animating with nobody to see it
+  if cell._output_hidden then return list end
   for i, o in ipairs(cell.outputs or {}) do
     if o.output_type == "execute_result" or o.output_type == "display_data" then
       local data = o.data or {}
@@ -510,19 +513,19 @@ local function render_cell(nb, cell, range, geom, win, cellno, selected, editing
         priority = 5000,
       })
     end
-    -- After a marker line, the key that shows what it hides. It stays
+    -- After a marker line, the key that shows what it stands for. It stays
     -- out of the text because the undo file read back on the next open has
     -- to match the buffer, and the keys can change in between.
     local cfg = require("jupynvim").config
     local K = require("jupynvim.notebook.keymaps")
-    for i in pairs(Notebook.output_marks(cell)) do
+    for i, what in pairs(Notebook.output_marks(cell)) do
       local row = range.out_sep + i
-      local lhs = K.lhs_for("expand_output", cfg)
+      local lhs = K.lhs_for(what == "hidden" and "hide_output" or "expand_output", cfg)
       local l = lhs and row < math.min(range.out_stop, total)
         and vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
       if l and l:find(Notebook.OUT_TRUNC_MARK, 1, true) == 3 then
         pcall(vim.api.nvim_buf_set_extmark, buf, nb.border_ns, row, 0, {
-          virt_text = { { (" %s to expand"):format(lhs), HL_MORE } },
+          virt_text = { { (" %s to %s"):format(lhs, what == "hidden" and "show" or "expand"), HL_MORE } },
           virt_text_pos = "eol",
           priority = 5001,
         })

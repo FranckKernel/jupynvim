@@ -1,9 +1,10 @@
--- How a cell shows its outputs, cut or expanded, #37.
+-- How a cell shows its outputs, cut, expanded or hidden, #37.
 --
 -- <leader>no shows all of an output the cap cut, and cuts it again. On a plot
 -- or a short print it changed nothing and still said "output expanded", which
--- read as broken. Expanding is a view of the cell. The .ipynb never sees it,
--- it leaves 'modified' as it was, and a save keeps it, because the undo file
+-- read as broken. What the report wanted was to hide a plot, which is
+-- <leader>nO now. Both are views of the cell. The .ipynb never sees them, they
+-- leave 'modified' as it was, and a save keeps them, because the undo file
 -- read back on the next open has to match the buffer, output rows included.
 
 package.path = "./lua/?.lua;./lua/?/init.lua;./tests/?.lua;" .. package.path
@@ -31,6 +32,7 @@ local Image  = require("jupynvim.notebook.image")
 local Render = require("jupynvim.notebook.render")
 local K      = require("jupynvim.notebook.keymaps")
 J.setup({ log_level = "warn", image_renderer = "placeholder" })
+local ROWS = J.config.image_rows or 16
 
 local notes = {}
 vim.notify = function(msg) notes[#notes + 1] = tostring(msg) end
@@ -92,6 +94,7 @@ local function text(buf) return table.concat(vim.api.nvim_buf_get_lines(buf, 0, 
 
 local function on(buf, id) vim.api.nvim_win_set_cursor(0, { range(buf, id).start + 1, 0 }) end
 local function expand(buf, id) on(buf, id); J.toggle_output_expand(buf); return said() end
+local function hide(buf, id) on(buf, id); J.toggle_output_hidden(buf); return said() end
 
 -- Run what TextChanged runs after a keymap, which a headless run never
 -- reaches on its own. That is where the buffer gets compared with the file.
@@ -101,6 +104,16 @@ local function event(buf, id, ev)
   J._handle_cell_event({ session_id = NB.get(buf).session_id, cell_id = id, event = ev })
 end
 local function synced() vim.wait(600) end
+
+local function plot_key(buf)
+  return Image.output_key(Image.output_owner(buf or vim.api.nvim_get_current_buf(), "plot"), 1)
+end
+local function plot_rows(buf) return #Render._build_image_virt_lines(cell(buf, "plot"), 80, NB.get(buf), "") end
+local function plot_sent(want, buf)
+  vim.wait(3000, function() return (Image._placements[plot_key(buf)] ~= nil) == want end, 20)
+  vim.wait(200)
+  return Image._placements[plot_key(buf)] ~= nil
+end
 
 -- the text render puts after the end of a 0-based row
 local function hint(buf, row)
@@ -118,6 +131,7 @@ do
   local p = tmp .. "/views.ipynb"
   write_nb(p)
   local buf = open(p)
+  chk("the plot is sent to the terminal on open", plot_sent(true))
   local before = text(buf)
 
   for _, id in ipairs({ "plot", "short", "empty", "how" }) do
@@ -143,12 +157,40 @@ do
   chk("all 1000 lines show", #rows == 1000 and rows[1000] == "  long line 1000", #rows .. " rows")
   chk("<leader>no again cuts it", expand(buf, "long") == "jupynvim: output collapsed" and #region(buf, "long") == 500)
 
-  -- ── a view leaves 'modified' alone ────────────────────────────────────
+  -- ── <leader>nO hides the whole output, a plot included ─────────────────
+  chk("<leader>nO hides the plot", hide(buf, "plot") == "jupynvim: output hidden", said())
+  rows = region(buf, "plot")
+  chk("one line says what is hidden", rows and #rows == 1 and rows[1] == "  ⋯ output hidden (1 image)",
+      vim.inspect(rows))
+  chk("the key to show it follows the line",
+      hint(buf, range(buf, "plot").out_sep + 1) == " <leader>nO to show", tostring(hint(buf, range(buf, "plot").out_sep + 1)))
+  chk("no rows are kept for the image", plot_rows(buf) == 0, plot_rows(buf) .. " rows")
+  chk("the terminal lets the image go", not plot_sent(false))
+  chk("<leader>no on a hidden output points at <leader>nO",
+      expand(buf, "plot") == "jupynvim: output is hidden, <leader>nO shows it", said())
+  chk("<leader>nO shows it again", hide(buf, "plot") == "jupynvim: output shown" and region(buf, "plot") == nil,
+      said())
+  chk("the image is sent again", plot_sent(true) and plot_rows(buf) == ROWS, plot_rows(buf) .. " rows")
+
+  chk("<leader>nO hides a long print", hide(buf, "long") == "jupynvim: output hidden")
+  rows = region(buf, "long")
+  chk("and counts its lines", #rows == 1 and rows[1] == "  ⋯ output hidden (1000 lines)", vim.inspect(rows))
+  chk("shown again, it is cut as before", hide(buf, "long") == "jupynvim: output shown" and #region(buf, "long") == 500)
+  expand(buf, "long"); hide(buf, "long"); hide(buf, "long")
+  chk("an expanded output comes back expanded", #region(buf, "long") == 1000)
+  expand(buf, "long")
+
+  chk("<leader>nO with no output says there is nothing to hide",
+      hide(buf, "empty") == "jupynvim: nothing to hide" and not cell(buf, "empty")._output_hidden, said())
+  chk("so does it on a markdown cell", hide(buf, "how") == "jupynvim: nothing to hide", said())
+
+  -- ── views leave 'modified' alone ──────────────────────────────────────
   changed(buf)
   chk("the notebook opens unmodified", not vim.bo[buf].modified)
-  for _, what in ipairs({ "expanding", "cutting again" }) do
-    expand(buf, "long"); changed(buf)
-    chk(what .. " an output leaves a clean notebook unmodified", not vim.bo[buf].modified)
+  for _, step in ipairs({ { expand, "long", "expanding" }, { expand, "long", "cutting again" },
+                          { hide, "plot", "hiding" }, { hide, "plot", "showing" } }) do
+    step[1](buf, step[2]); changed(buf)
+    chk(step[3] .. " an output leaves a clean notebook unmodified", not vim.bo[buf].modified)
   end
   -- an edit, then a new view, and it is still modified
   local r = range(buf, "empty")
@@ -156,26 +198,32 @@ do
   vim.api.nvim_buf_set_lines(buf, r.start, r.start + 1, false, { "x = 2" })
   changed(buf)
   chk("an edit marks it modified", vim.bo[buf].modified)
-  expand(buf, "long"); changed(buf)
-  chk("and expanding an output after it leaves it modified", vim.bo[buf].modified)
+  hide(buf, "plot"); changed(buf)
+  chk("and hiding an output after it leaves it modified", vim.bo[buf].modified)
   chk("the edit survives the rewrite", vim.api.nvim_buf_get_lines(buf, range(buf, "empty").start,
       range(buf, "empty").start + 1, false)[1] == "x = 2")
 
-  -- ── a save keeps every output, and the view comes back on open ────────
+  -- ── a save keeps every output, and the views come back on open ─────────
+  expand(buf, "long")
   vim.api.nvim_buf_call(buf, function() vim.cmd("silent write") end)
   vim.wait(3000, function() return not vim.bo[buf].modified end, 20)
   local f = io.open(p); local saved = vim.json.decode(f:read("*a")); f:close()
   local by = {}
   for _, c in ipairs(saved.cells) do by[c.id] = c end
   local function joined(v) return type(v) == "table" and table.concat(v) or v end
-  chk("the .ipynb keeps every printed line", by.long and joined(by.long.outputs[1].text) == printed(1000))
+  chk("the .ipynb keeps the hidden plot", by.plot and #by.plot.outputs == 1
+      and joined(by.plot.outputs[1].data["image/png"]) == PLOT)
+  chk("and every printed line", by.long and joined(by.long.outputs[1].text) == printed(1000))
   chk("and the edit", by.empty and joined(by.empty.source) == "x = 2")
   local seq = vim.api.nvim_buf_call(buf, vim.fn.undotree).seq_last
 
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
   Image.clear_all()
   buf = open(p)
-  chk("reopened, the long print is still expanded", #(region(buf, "long") or {}) == 1000)
+  rows = region(buf, "plot")
+  chk("reopened, the plot is still hidden", cell(buf, "plot")._output_hidden
+      and rows and rows[1] == "  ⋯ output hidden (1 image)", vim.inspect(rows))
+  chk("and the long print still expanded", #(region(buf, "long") or {}) == 1000)
   local ut = vim.api.nvim_buf_call(buf, vim.fn.undotree)
   chk("the undo history the save wrote is read back", #ut.entries > 0 and ut.seq_last == seq,
       ("%d entries, seq_last %d, saved at %d"):format(#ut.entries, ut.seq_last, seq))
@@ -183,21 +231,30 @@ do
   Image.clear_all()
 
   -- The file changes after the save, the way a run in JupyterLab or a git
-  -- checkout changes it. The view was saved for the old text and goes.
+  -- checkout changes it. The views were saved for the old text and go.
   write_nb(p, 3000)
   buf = open(p)
   chk("opened on a file changed since the save, the long print is cut",
       #(region(buf, "long") or {}) == 500 and not cell(buf, "long")._output_expanded,
       #(region(buf, "long") or {}) .. " rows")
+  chk("and the plot shows", not cell(buf, "plot")._output_hidden and region(buf, "plot") == nil)
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
   Image.clear_all()
 end
 
--- ── a new run, and a collapse with nothing left to cut ───────────────────
+-- ── a run while hidden, a collapse with nothing left to cut ──────────────
 do
   local p = tmp .. "/runs.ipynb"
   write_nb(p)
   local buf = open(p)
+  hide(buf, "short")
+  event(buf, "short", { kind = "execute_input", execution_count = 2 })
+  event(buf, "short", { kind = "stream", name = "stdout", text = "a\nb\nc\n" })
+  synced()
+  local rows = region(buf, "short")
+  chk("a run while hidden stays hidden, and recounts", rows and #rows == 1
+      and rows[1] == "  ⋯ output hidden (3 lines)", vim.inspect(rows))
+
   -- a new run is a new output, cut again
   expand(buf, "long")
   event(buf, "long", { kind = "execute_input", execution_count = 2 })
@@ -214,6 +271,11 @@ do
   chk("cut to nothing in the same run, it has nothing to collapse",
       expand(buf, "long") == "jupynvim: nothing to collapse", said())
   chk("and stops being expanded", not cell(buf, "long")._output_expanded)
+
+  on(buf, "short"); J.clear_cell_output(buf); vim.wait(200)
+  chk("a hidden output cleared away has nothing to show", hide(buf, "short") == "jupynvim: nothing to show",
+      said())
+  chk("and no longer hidden", not cell(buf, "short")._output_hidden)
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
   Image.clear_all()
 end
@@ -228,13 +290,45 @@ do
   local bb = open(b)
   vim.api.nvim_set_current_buf(ba)
   local long_rows = #NB.output_lines(cell(bb, "long"))
+  local short_rows = #NB.output_lines(cell(bb, "short"))
   expand(ba, "long")
+  hide(ba, "short")
   chk("expanding in one copy leaves the other as it was", #NB.output_lines(cell(bb, "long")) == long_rows,
       ("%d rows, %d before"):format(#NB.output_lines(cell(bb, "long")), long_rows))
+  chk("hiding in one copy leaves the other as it was", #NB.output_lines(cell(bb, "short")) == short_rows)
   expand(ba, "long")
   chk("and so does cutting it again", #NB.output_lines(cell(bb, "long")) == long_rows)
+  -- the images too: owned by the cell id alone, hiding the plot in one copy
+  -- freed the other copy's
+  chk("the other copy's plot is in the terminal", plot_sent(true, bb))
+  hide(ba, "plot")
+  Render.refresh_sync(NB.get(ba), vim.fn.bufwinid(ba))
+  vim.wait(300)
+  chk("hiding the plot in one copy keeps the other copy's image",
+      Image._placements[plot_key(bb)] ~= nil and plot_rows(bb) == ROWS, plot_rows(bb) .. " rows")
   pcall(vim.api.nvim_buf_delete, ba, { force = true })
   pcall(vim.api.nvim_buf_delete, bb, { force = true })
+  Image.clear_all()
+end
+
+-- ── a key acts on the cell the buffer shows ──────────────────────────────
+-- After :undo N an output can show its older view until the next edit. Laid
+-- out from the cells instead of the buffer, every line below it named
+-- another cell, and <leader>nO on the cell under the print hid the print.
+do
+  local p = tmp .. "/jump.ipynb"
+  write_nb(p)
+  local buf = open(p)
+  expand(buf, "long")
+  vim.bo[buf].modifiable = true
+  vim.cmd("silent undo 0")
+  changed(buf)
+  chk("after :undo 0 the long print shows cut", #(region(buf, "long") or {}) == 500,
+      #(region(buf, "long") or {}) .. " rows")
+  local msg = hide(buf, "empty")
+  chk("<leader>nO on the cell below it acts on that cell", msg == "jupynvim: nothing to hide", tostring(msg))
+  chk("and leaves the long print alone", not cell(buf, "long")._output_hidden)
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
   Image.clear_all()
 end
 
@@ -250,7 +344,7 @@ do
   J.delete_cell(buf)
   vim.wait(3000, function() return #NB.get(buf).cells == 4 end, 20)
   chk("the delete leaves 'modified' to TextChanged", #NB.get(buf).cells == 4 and not vim.bo[buf].modified)
-  expand(buf, "long")
+  hide(buf, "plot")
   chk("a view right after it marks the notebook modified", vim.bo[buf].modified)
   changed(buf)
   chk("and TextChanged keeps it so", vim.bo[buf].modified)
@@ -258,25 +352,39 @@ do
   Image.clear_all()
 end
 
--- ── the key in the hint ──────────────────────────────────────────────────
+-- ── the keys ─────────────────────────────────────────────────────────────
 do
   local p = tmp .. "/keys.ipynb"
   write_nb(p)
   local buf = open(p)
-  chk("the hint key is the default one", K.lhs_for("expand_output", {}) == "<leader>no")
-  chk("or the one the user bound",
-      K.lhs_for("expand_output", { keymaps = { expand_output = "<leader>x" } }) == "<leader>x")
+  on(buf, "how")
+  J.jump_image(buf, 1)
+  chk("]i lands on the plot", CM.cell_idx_at(buf, vim.api.nvim_win_get_cursor(0)[1]) == idx(buf, "plot"))
+  hide(buf, "plot")
+  on(buf, "how")
+  J.jump_image(buf, 1)
+  chk("and passes it by while it is hidden",
+      CM.cell_idx_at(buf, vim.api.nvim_win_get_cursor(0)[1]) ~= idx(buf, "plot"))
+  hide(buf, "plot")
+  local m = vim.fn.maparg("<leader>nO", "n", false, true)
+  chk("<leader>nO is bound in a notebook", m.buffer == 1 and m.desc == "Hide/show cell output", vim.inspect(m.desc))
+  chk("the hint key is the default one", K.lhs_for("hide_output", {}) == "<leader>nO")
+  chk("or the one the user bound", K.lhs_for("hide_output", { keymaps = { hide_output = "<leader>x" } }) == "<leader>x")
   chk("given as a table too",
       K.lhs_for("expand_output", { keymaps = { expand_output = { lhs = "<F7>" } } }) == "<F7>")
-  chk("none when it is disabled", K.lhs_for("expand_output", { keymaps = { expand_output = false } }) == nil)
-  chk("none when every default is off", K.lhs_for("expand_output", { disable_default_keymaps = true }) == nil)
+  chk("none when it is disabled", K.lhs_for("hide_output", { keymaps = { hide_output = false } }) == nil)
+  chk("none when every default is off", K.lhs_for("hide_output", { disable_default_keymaps = true }) == nil)
   chk("none when it is bound outside normal mode",
-      K.lhs_for("expand_output", { keymaps = { expand_output = { lhs = "<C-o>", mode = "i" } } }) == nil)
-  local row = range(buf, "long").out_sep + 126
-  J.config.keymaps = { expand_output = "<leader>x" }
-  chk("the hint names a rebound key", hint(buf, row) == " <leader>x to expand", tostring(hint(buf, row)))
-  J.config.keymaps = { expand_output = false }
-  chk("with the key disabled the hint goes", hint(buf, row) == nil)
+      K.lhs_for("hide_output", { keymaps = { hide_output = { lhs = "<C-o>", mode = "i" } } }) == nil)
+  -- the hint and the message name the key that is bound
+  J.config.keymaps = { hide_output = "<leader>x" }
+  hide(buf, "plot")
+  chk("the hint names a rebound key", hint(buf, range(buf, "plot").out_sep + 1) == " <leader>x to show",
+      tostring(hint(buf, range(buf, "plot").out_sep + 1)))
+  chk("and so does the message", expand(buf, "plot") == "jupynvim: output is hidden, <leader>x shows it", said())
+  J.config.keymaps = { hide_output = false }
+  chk("with the key disabled the hint goes", hint(buf, range(buf, "plot").out_sep + 1) == nil)
+  chk("and the message names none", expand(buf, "plot") == "jupynvim: output is hidden", said())
   J.config.keymaps = {}
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
   Image.clear_all()

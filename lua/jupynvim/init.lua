@@ -1398,17 +1398,18 @@ end
 
 -- Written with the undo file on every save: how far back that history
 -- belongs to the cell list saved with it, which of its steps are the
--- plugin's own rewrites, and which outputs showed expanded. The undo file
--- itself cannot say.
+-- plugin's own rewrites, and which outputs showed expanded or hidden. The
+-- undo file itself cannot say.
 function M._note_history(nb, uf)
   local ut = vim.api.nvim_buf_call(nb.buf, vim.fn.undotree)
   local floor = nb._ck_nr or 0
   local rw = {}
   for k in pairs(nb._rewrites or {}) do if k >= floor then rw[#rw + 1] = k end end
   table.sort(rw)
-  local views = { expanded = {} }
+  local views = { expanded = {}, hidden = {} }
   for _, c in ipairs(nb.cells) do
     if c._output_expanded then table.insert(views.expanded, c.id) end
+    if c._output_hidden then table.insert(views.hidden, c.id) end
   end
   local path = history_note(uf)
   pcall(vim.fn.mkdir, vim.fn.fnamemodify(path, ":h"), "p")
@@ -1419,10 +1420,10 @@ function M._note_history(nb, uf)
   f:close()
 end
 
--- Expand the outputs the last save had expanded, before the first populate.
--- Vim reads an undo file back only onto the very text it was written from,
--- and output rows are text. Opened cut, a notebook saved with an output
--- expanded lost its undo history.
+-- Expand and hide the outputs the last save had expanded or hidden, before
+-- the first populate. Vim reads an undo file back only onto the very text it
+-- was written from, and output rows are text. Opened cut or shown, a notebook
+-- saved with an output expanded or hidden lost its undo history.
 function M._restore_views(nb, uf)
   local note = read_note(uf)
   local views = note and note.views
@@ -1432,17 +1433,18 @@ function M._restore_views(nb, uf)
     for _, id in ipairs(type(list) == "table" and list or {}) do s[id] = true end
     return s
   end
-  local expanded = set(views.expanded)
+  local expanded, hidden = set(views.expanded), set(views.hidden)
   local any = false
   for _, c in ipairs(nb.cells) do
     c._output_expanded = expanded[c.id]
-    any = any or expanded[c.id] or false
+    c._output_hidden = hidden[c.id]
+    any = any or expanded[c.id] or hidden[c.id] or false
   end
   -- Worth it only on the very text the undo file was written from. Kept on a
   -- file changed since, an expanded output stayed uncut through whatever
   -- prints under that cell id now.
   if any and note.hash ~= vim.fn.sha256(table.concat((nb:to_lines()), "\n")) then
-    for _, c in ipairs(nb.cells) do c._output_expanded = nil end
+    for _, c in ipairs(nb.cells) do c._output_expanded, c._output_hidden = nil, nil end
   end
 end
 
@@ -2766,14 +2768,14 @@ end
 
 local function say(msg) vim.notify("jupynvim: " .. msg, vim.log.levels.INFO) end
 
--- Rewrite one cell's output rows when it is expanded or cut again, the way
--- an output sync does, so the rest of the buffer and the language servers
--- see no change. The notebook is the same, so 'modified' is too, and a
--- buffer that matched the file still does in its new view. Rewritten
--- plainly, it read as changed and :q refused to quit. 'modified' alone can
--- say clean when it is not, because a repopulate resets it and TextChanged
--- sets it back only after the keys that follow, so the text has to match as
--- well.
+-- Rewrite one cell's output rows when it is expanded, cut again, hidden or
+-- shown, the way an output sync does, so the rest of the buffer and the
+-- language servers see no change. The notebook is the same, so 'modified' is
+-- too, and a buffer that matched the file still does in its new view.
+-- Rewritten plainly, it read as changed and :q refused to quit. 'modified'
+-- alone can say clean when it is not, because a repopulate resets it and
+-- TextChanged sets it back only after the keys that follow, so the text has
+-- to match as well.
 local function redraw_view(nb, cell)
   local buf = nb.buf
   local function text_hash()
@@ -2799,6 +2801,11 @@ end
 function M.toggle_output_expand(buf)
   local nb, cell = cursor_cell(buf)
   if not cell then return end
+  if cell._output_hidden and Notebook.output_shows(cell) then
+    local lhs = Keymaps.lhs_for("hide_output", M.config)
+    say("output is hidden" .. (lhs and (", " .. lhs .. " shows it") or ""))
+    return
+  end
   local cut = Notebook.output_cut(cell)
   if not cell._output_expanded then
     if not cut then say("nothing to expand"); return end
@@ -2810,6 +2817,25 @@ function M.toggle_output_expand(buf)
   end
   redraw_view(nb, cell)
   say(cell._output_expanded and "output expanded" or "output collapsed")
+end
+
+-- Hide the whole output under the cursor, plots included, behind one line
+-- saying what it holds, or show it again, the way JupyterLab and VS Code
+-- collapse an output, #37. Only the view changes, and the .ipynb keeps it all.
+function M.toggle_output_hidden(buf)
+  local nb, cell = cursor_cell(buf)
+  if not cell then return end
+  local shows = Notebook.output_shows(cell)
+  if not cell._output_hidden then
+    if not shows then say("nothing to hide"); return end
+    cell._output_hidden = true
+  else
+    -- a hidden cell with nothing to show looks the same either way
+    cell._output_hidden = nil
+    if not shows then say("nothing to show"); return end
+  end
+  redraw_view(nb, cell)
+  say(cell._output_hidden and "output hidden" or "output shown")
 end
 
 -- Compatibility shim for the old name; defaults to "down" direction.
@@ -2833,6 +2859,8 @@ function M.jump_image(buf, delta)
       local imgs = Embedded.list_images(cell.id) or {}
       if #imgs > 0 then return true end
     end
+    -- a hidden output shows no image to land on
+    if cell._output_hidden then return false end
     for _, o in ipairs(cell.outputs or {}) do
       local d = (o.output_type == "execute_result" or o.output_type == "display_data") and o.data or nil
       if d and (d["image/png"] or d["image/jpeg"] or d["image/gif"]) then return true end
