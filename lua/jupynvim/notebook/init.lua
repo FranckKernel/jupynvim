@@ -443,8 +443,16 @@ end
 -- the separator below it, the same rule as CellMode.cell_idx_at. Output rows
 -- used to count as "between cells" and resolve to the NEXT cell, so running,
 -- clearing or saving from a cell's output acted on the cell after it.
+-- The layout comes from the buffer, not from to_lines. After :undo N or g-
+-- an output can still show as it was until the next edit puts it right.
+-- Laid out from the cells, every line below it named another cell, and a
+-- key acted on the wrong one.
 -- Returns id, range, index.
 function Notebook:cell_at_line(lnum)
+  if vim.api.nvim_buf_is_valid(self.buf) then
+    local i, r = require("jupynvim.notebook.cellmode").cell_idx_at(self.buf, lnum)
+    if self.cells[i] then return self.cells[i].id, r, i end
+  end
   local _, ranges = self:to_lines()
   for i = #ranges, 1, -1 do
     if lnum - 1 >= ranges[i].start then return ranges[i].id, ranges[i], i end

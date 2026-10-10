@@ -40,13 +40,11 @@ local TYPE_TO_KIND = {
 -- and dotted paths in context.
 local function code_and_cursor_for(buf, pos, nb)
   if not nb then return nil end
-  local cell_id = nb:cell_at_line(pos.line + 1)
-  if not cell_id then return nil end
-  local cell, idx = nb:get_cell(cell_id)
+  -- the source lines as the buffer lays them out, the way the cell was found
+  local cell_id, r = nb:cell_at_line(pos.line + 1)
+  if not (cell_id and r) then return nil end
+  local cell = nb:get_cell(cell_id)
   if not cell or cell.cell_type ~= "code" then return nil end
-  local _, ranges = nb:to_lines()
-  local r = ranges[idx]
-  if not r then return nil end
   local lines = vim.api.nvim_buf_get_lines(buf, r.start, r.stop, false)
   -- Cursor is in `pos` (0-based). Compute byte offset within the cell text.
   local cell_row = pos.line - r.start

@@ -220,6 +220,25 @@ do
   close(buf, p)
 end
 
+-- ── the cell under the cursor while an output is on its way ─────────────
+-- An output reaches the cells at once and the buffer when the sync runs.
+-- Laid out from the cells in between, every line below that output named
+-- another cell, so <S-CR> on c3 ran c1.
+do
+  local buf, p = open({ code("c1", "print(1)"), code("c2", "print(2)"), code("c3", "print(3)") })
+  local nb = NB.get(buf)
+  local c3 = CM.ranges(buf)[3].start + 1
+  J._handle_cell_event({ session_id = nb.session_id, cell_id = "c1",
+    event = { kind = "stream", name = "stdout", text = ("x\n"):rep(30) } })
+  chk("before the buffer has c1's new output, a line of c3 is still c3", nb:cell_at_line(c3) == "c3",
+      tostring(nb:cell_at_line(c3)))
+  vim.wait(600)
+  local now = CM.ranges(buf)[3].start + 1
+  chk("and once it has, c3 is still c3", now > c3 and nb:cell_at_line(now) == "c3",
+      ("line %d, %s"):format(now, tostring(nb:cell_at_line(now))))
+  close(buf, p)
+end
+
 if fails == 0 then
   io.write("\nALL EDIT-NAV CHECKS PASSED\n")
   vim.cmd("qa!")
