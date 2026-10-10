@@ -1,6 +1,6 @@
 # jupynvim
 
-[![release](https://img.shields.io/github/v/release/sheng-tse/jupynvim?include_prereleases&label=release&labelColor=24292f&color=F58426)](https://github.com/sheng-tse/jupynvim/releases)
+[![release](https://img.shields.io/github/v/release/sheng-tse/jupynvim?label=release&labelColor=24292f&color=F58426)](https://github.com/sheng-tse/jupynvim/releases)
 [![downloads](https://img.shields.io/github/downloads/sheng-tse/jupynvim/total?labelColor=24292f&color=006BB6)](https://github.com/sheng-tse/jupynvim/releases)
 [![license](https://img.shields.io/badge/license-MIT-006BB6?labelColor=24292f)](LICENSE)
 [![closed issues](https://img.shields.io/github/issues-closed/sheng-tse/jupynvim?labelColor=24292f&color=006BB6)](https://github.com/sheng-tse/jupynvim/issues?q=is%3Aissue+is%3Aclosed)
