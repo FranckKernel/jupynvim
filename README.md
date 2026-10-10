@@ -190,7 +190,7 @@ matched to the release the plugin came from:
 
 ```lua
 local function build(p) dofile(p.path .. "/lua/jupynvim/install.lua").run({ dir = p.path }) end
-MiniDeps.add({ source = "sheng-tse/jupynvim", checkout = "v0.4.5",
+MiniDeps.add({ source = "sheng-tse/jupynvim", checkout = "v0.4.6",
                hooks = { post_install = build, post_checkout = build } })
 ```
 
