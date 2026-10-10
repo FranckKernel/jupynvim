@@ -387,8 +387,13 @@ there.
 | `<leader>nI` | Save current cell's image to file |
 | `<leader>nD` | Delete an embedded image from a markdown cell |
 | `]i` or `[i` | Jump to next or prev cell with an image |
-| `<leader>no` | Expand or collapse a truncated output |
+| `<leader>no` | Show all of an output cut at `max_output_lines`, or cut it again |
 | `gx` | Open the link under the cursor |
+
+Expanding changes only the view. The `.ipynb` keeps every output and the
+notebook isn't marked modified. A new run cuts an expanded output back to the
+cap. A notebook you save reopens with the same outputs expanded, unless the
+file changed since.
 
 ### Kernel control
 

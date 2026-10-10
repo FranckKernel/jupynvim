@@ -71,30 +71,30 @@ end
 -- DISPLAY ONLY: sync_from_buffer skips the output region entirely and saves
 -- read cell.outputs from the model, so nothing is lost from the .ipynb.
 M.max_output_lines = 500
-M._output_expanded = {}   -- cell_id -> true, per-cell "show it all"
 
-function M.toggle_output_expanded(cell_id)
-  if not cell_id then return false end
-  M._output_expanded[cell_id] = not M._output_expanded[cell_id] or nil
-  return M._output_expanded[cell_id] == true
-end
+-- How a cell shows its outputs is kept on the cell table, so each notebook has
+-- its own even when two hold the same cell ids, as a copied .ipynb does. A
+-- save sends only ids, types and sources, so none of it reaches the file.
+--   cell._output_expanded  shows all of an output the cap cuts, <leader>no
+-- Render puts the key to press after a marker line instead of in its text, so
+-- the buffer, and the undo file written from it, stay the same when keymaps
+-- change.
 
 -- Per-cell render cache. output_lines is called from to_lines, which the LSP
 -- diagnostic and didChange paths hit dozens of times per keystroke; on a
 -- notebook storing a 420KB `!tree` dump that was 27ms EVERY time and pegged the
 -- editor at ~97% of wall clock with the main loop starved.
 --
--- Weak keys so the entry dies with the cell and nothing is added to the cell
--- table itself (cells get serialised back to the backend; a cache field there
--- would leak into the .ipynb).
+-- Weak keys so the entry dies with the cell.
 local _ol_cache = setmetatable({}, { __mode = "k" })
 
 -- Cheap, content-derived key: O(#outputs) length lookups, no string scanning.
 -- Within one output list, streams append text, new outputs change the count,
--- and display-handle updates bump _rev. output_lines also checks the list's
--- identity: a rerun can replace it with different text of the same length.
+-- and display-handle updates bump _rev. The cache also checks the list's
+-- identity, since a rerun can replace it with different text of the same
+-- length.
 local function _out_key(cell)
-  local p = { M.max_output_lines, M._output_expanded[cell.id] and 1 or 0 }
+  local p = { M.max_output_lines, cell._output_expanded and 1 or 0 }
   for _, o in ipairs(cell.outputs or {}) do
     local t, d = o.text, o.data
     p[#p + 1] = (o.output_type or "?") .. (o._rev or "")
@@ -111,19 +111,14 @@ end
 
 -- A marker line in place of the lines the cap hides.
 local function trunc_marker(hidden, total)
-  return string.format("  %s %d lines hidden (%d total) - <leader>no to expand",
-    M.OUT_TRUNC_MARK, hidden, total)
+  return string.format("  %s %d lines hidden (%d total)", M.OUT_TRUNC_MARK, hidden, total)
 end
 
-function M.output_lines(cell)
-  local key = _out_key(cell)
-  local hit = _ol_cache[cell]
-  -- A fast run can clear and refill outputs before the debounced render
-  -- observes the empty list. Lengths alone then match the previous run and
-  -- would keep displaying its result even though the kernel returned a new one.
-  if hit and hit.outputs == cell.outputs and hit.key == key then return hit.lines end
-
-  local cap = not M._output_expanded[cell.id] and M.max_output_lines or nil
+-- The rows a cell's outputs show, which of them are markers, whether the cap
+-- cut any lines, and how many lines the outputs have in all. `expanded`
+-- shows every line.
+local function build(cell, expanded)
+  local cap = not expanded and M.max_output_lines or nil
   local head, tail, fit
   if cap and cap > 0 then
     head = math.max(1, math.floor(cap / 4))
@@ -226,19 +221,61 @@ function M.output_lines(cell)
     end
     return n
   end
+  local total = count(1, #lines)
+  local marks = {}
+  for row in pairs(hides) do marks[row] = true end
 
   -- Anything still over the cap (many outputs, or non-stream) is trimmed here,
   -- keeping BOTH ends: for a training log the final epochs are the point.
   if fit and #lines > fit then
     local shown = {}
     for k = 1, head do shown[#shown + 1] = lines[k] end
-    shown[#shown + 1] = trunc_marker(count(head + 1, #lines - tail), count(1, #lines))
+    shown[#shown + 1] = trunc_marker(count(head + 1, #lines - tail), total)
     for k = #lines - tail + 1, #lines do shown[#shown + 1] = lines[k] end
-    lines = shown
+    -- a stream's marker sits in what was dropped, unless trailing blank lines
+    -- were cut from under it
+    local drop = #lines - tail - head - 1
+    local kept = { [head + 1] = true }
+    for row in pairs(hides) do
+      if row > #lines - tail then kept[row - drop] = true end
+    end
+    lines, marks = shown, kept
   end
+  return lines, marks, next(marks) ~= nil, total
+end
 
-  _ol_cache[cell] = { outputs = cell.outputs, key = key, lines = lines }
-  return lines
+local function cached(cell)
+  local key = _out_key(cell)
+  local hit = _ol_cache[cell]
+  -- A fast run can clear and refill outputs before the debounced render
+  -- observes the empty list. Lengths alone then match the previous run and
+  -- would keep displaying its result even though the kernel returned a new one.
+  if hit and hit.outputs == cell.outputs and hit.key == key then return hit end
+  local e = { key = key, outputs = cell.outputs }
+  local marks
+  e.lines, marks, e.cut = build(cell, cell._output_expanded)
+  e.marks = {}
+  for row in pairs(marks) do e.marks[row] = "cut" end
+  _ol_cache[cell] = e
+  return e
+end
+
+function M.output_lines(cell)
+  return cached(cell).lines
+end
+
+-- The rows of output_lines(cell) that stand for lines the cap hides, as
+-- row -> "cut".
+function M.output_marks(cell)
+  return cached(cell).marks
+end
+
+-- Does the cap cut this cell's output when it is not expanded? Then
+-- <leader>no has lines to show, or to cut again.
+function M.output_cut(cell)
+  if not cell._output_expanded then return cached(cell).cut end
+  local _, _, cut = build(cell, false)
+  return cut
 end
 
 -- "2026-06-12T21:38:05.123Z" -> epoch seconds (fractional). Both stamps
@@ -495,6 +532,9 @@ function Notebook:apply_cell_event(cell_id, ev)
   if kind == "execute_input" then
     c.execution_count = ev.execution_count
     c.outputs = {}
+    -- A new run is a new output, cut again. Kept on, expanding one long
+    -- print let the next run fill the buffer with whatever it printed.
+    c._output_expanded = nil
     -- start the execution stopwatch (drives the VSCode-style "[1] ✓ 0.1s"
     -- bar; live elapsed while busy, frozen duration once idle)
     self.cell_state[cell_id] = { exec_state = "busy", started_ns = vim.uv.hrtime() }

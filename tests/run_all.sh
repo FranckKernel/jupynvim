@@ -23,6 +23,7 @@
 #      + install_spec.lua (installing the binary without lazy.nvim, #33)
 #      + output_cache_spec.lua (equal-length output after fast reruns)
 #      + stale_output_e2e.lua (redefine a function and rerun its unchanged caller)
+#      + output_view_spec.lua (outputs cut or expanded, #37)
 #   5. frame_layout.sh (real rendered screen via tmux: frame alignment across
 #      terminal-split / floating-window layout changes)
 #      remote_hl_screen.sh (real rendered screen via tmux: dashboard/explorer
@@ -32,6 +33,8 @@
 #      boundary, and what :w saves)
 #      undo_screen.sh (real nvim via tmux: undo and redo around outputs, cell
 #      moves and the history an open reads back)
+#      output_view_screen.sh (real nvim via tmux: <leader>no, :q after it,
+#      and u after a restart with an output expanded)
 #
 # All must pass for the suite to succeed.
 
@@ -157,7 +160,7 @@ section "remote-hl spec" "$?"
 # plain `qa!` there that crash used to count as a pass.
 for spec in remote_pick_open_spec remote_open_layout_spec dispatch_keys_spec deploy_probe_spec \
             keymap_override_spec image_b64_spec reopen_lsp_spec edit_nav_spec \
-            multi_image_spec install_spec output_cache_spec stale_output_e2e; do
+            multi_image_spec install_spec output_cache_spec stale_output_e2e output_view_spec; do
   out=$(nv --headless -u NONE -c "luafile $ROOT/tests/$spec.lua" -c 'cquit 3' 2>&1)
   rc=$?
   echo "$out" | tail -1
@@ -177,6 +180,8 @@ bash "$ROOT/tests/boundary_screen.sh"
 section "boundary screen" "$?"
 bash "$ROOT/tests/undo_screen.sh"
 section "undo screen" "$?"
+bash "$ROOT/tests/output_view_screen.sh"
+section "output-view screen" "$?"
 
 # ── Summary ─────────────────────────────────────────────
 echo

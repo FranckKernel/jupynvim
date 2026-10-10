@@ -121,6 +121,20 @@ local function resolve(def, override)
   return lhs, mode
 end
 
+-- The normal-mode key that `name` is bound to under `cfg`, for a hint like
+-- "<leader>no to expand". nil when this module does not bind it there.
+function M.lhs_for(name, cfg)
+  cfg = cfg or {}
+  local def = M.defaults[name]
+  if not def or cfg.disable_default_keymaps then return nil end
+  local lhs, mode = resolve(def, (cfg.keymaps or {})[name])
+  if lhs == nil then return nil end
+  -- an empty lhs fails to bind, and the default is bound instead
+  if type(lhs) ~= "string" or lhs == "" then lhs, mode = def.lhs, def.mode end
+  local modes = type(mode) == "table" and mode or { mode }
+  return vim.tbl_contains(modes, "n") and lhs or nil
+end
+
 local warned = {}
 
 -- Bind every default (honouring overrides) onto `buf`.

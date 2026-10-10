@@ -475,6 +475,9 @@ function M.open(path, opts)
 
   local nb = Notebook.create(buf, abs, sid, snap)
   nb.notebook_meta = { language = ft }
+  -- the undo file read back below holds outputs as the last save showed them
+  local uf = vim.api.nvim_buf_call(buf, function() return vim.fn.undofile(abs) end)
+  M._restore_views(nb, uf)
   M._populate_buffer(nb)
   -- Snapshot the rendered buffer text as the "saved" baseline. TextChanged
   -- compares against this to decide whether to force modified=true. Without
@@ -514,7 +517,6 @@ function M.open(path, opts)
   -- cells correctly. Vim's normal-load path auto-reads the undo file, but
   -- our BufReadCmd hijack bypasses that, so we rundo manually here.
   vim.bo[buf].undofile = true
-  local uf = vim.api.nvim_buf_call(buf, function() return vim.fn.undofile(abs) end)
   vim.api.nvim_buf_call(buf, function()
     if uf ~= "" and vim.fn.filereadable(uf) == 1 then
       pcall(vim.cmd, "silent! rundo " .. vim.fn.fnameescape(uf))
@@ -1386,22 +1388,62 @@ local function history_note(uf)
   return vim.fn.stdpath("state") .. "/jupynvim/undo/" .. vim.fn.sha256(uf) .. ".json"
 end
 
+local function read_note(uf)
+  local f = uf and uf ~= "" and io.open(history_note(uf), "r")
+  if not f then return nil end
+  local ok, note = pcall(vim.json.decode, f:read("*a"))
+  f:close()
+  return ok and type(note) == "table" and note or nil
+end
+
 -- Written with the undo file on every save: how far back that history
--- belongs to the cell list saved with it, and which of its steps are the
--- plugin's own rewrites. The undo file itself cannot say.
+-- belongs to the cell list saved with it, which of its steps are the
+-- plugin's own rewrites, and which outputs showed expanded. The undo file
+-- itself cannot say.
 function M._note_history(nb, uf)
   local ut = vim.api.nvim_buf_call(nb.buf, vim.fn.undotree)
   local floor = nb._ck_nr or 0
   local rw = {}
   for k in pairs(nb._rewrites or {}) do if k >= floor then rw[#rw + 1] = k end end
   table.sort(rw)
+  local views = { expanded = {} }
+  for _, c in ipairs(nb.cells) do
+    if c._output_expanded then table.insert(views.expanded, c.id) end
+  end
   local path = history_note(uf)
   pcall(vim.fn.mkdir, vim.fn.fnamemodify(path, ":h"), "p")
   local f = io.open(path, "w")
   if not f then return end
   f:write(vim.json.encode({ hash = nb.saved_hash, cur = ut.seq_cur, last = ut.seq_last,
-                            floor = floor, rewrites = rw }))
+                            floor = floor, rewrites = rw, views = views }))
   f:close()
+end
+
+-- Expand the outputs the last save had expanded, before the first populate.
+-- Vim reads an undo file back only onto the very text it was written from,
+-- and output rows are text. Opened cut, a notebook saved with an output
+-- expanded lost its undo history.
+function M._restore_views(nb, uf)
+  local note = read_note(uf)
+  local views = note and note.views
+  if type(views) ~= "table" then return end
+  local function set(list)
+    local s = {}
+    for _, id in ipairs(type(list) == "table" and list or {}) do s[id] = true end
+    return s
+  end
+  local expanded = set(views.expanded)
+  local any = false
+  for _, c in ipairs(nb.cells) do
+    c._output_expanded = expanded[c.id]
+    any = any or expanded[c.id] or false
+  end
+  -- Worth it only on the very text the undo file was written from. Kept on a
+  -- file changed since, an expanded output stayed uncut through whatever
+  -- prints under that cell id now.
+  if any and note.hash ~= vim.fn.sha256(table.concat((nb:to_lines()), "\n")) then
+    for _, c in ipairs(nb.cells) do c._output_expanded = nil end
+  end
 end
 
 -- Open wipes the undo history, then reads it back from the undo file, so the
@@ -1422,13 +1464,8 @@ function M._start_history(nb, uf)
     nb._seen[0] = nb._ck
   else
     floor = ut.seq_last + 1
-    local f = uf and uf ~= "" and io.open(history_note(uf), "r")
-    local ok, note = false, nil
-    if f then
-      ok, note = pcall(vim.json.decode, f:read("*a"))
-      f:close()
-    end
-    if ok and type(note) == "table" and note.hash == nb.saved_hash and note.cur == ut.seq_cur
+    local note = read_note(uf)
+    if note and note.hash == nb.saved_hash and note.cur == ut.seq_cur
         and note.last == ut.seq_last and type(note.floor) == "number" then
       floor = note.floor
       for _, k in ipairs(type(note.rewrites) == "table" and note.rewrites or {}) do
@@ -2717,27 +2754,65 @@ function M._write_image(cell, img, path)
   vim.notify("jupynvim: saved " .. path, vim.log.levels.INFO)
 end
 
--- Compatibility shim for the old name; defaults to "down" direction.
--- Expand or re-collapse the truncated output of the cell under the cursor.
-function M.toggle_output_expand(buf)
+-- The notebook and the cell under the cursor, its source brought up to date
+-- from the buffer, which the output toggles below rebuild from the cells.
+local function cursor_cell(buf)
   local nb = Notebook.get(buf)
   if not nb then return end
-  M._sync_model(nb)   -- the buffer is rebuilt from the cells below
-  local lnum = vim.api.nvim_win_get_cursor(0)[1]
-  local cell_id = nb:cell_at_line(lnum)
-  if not cell_id then return end
-  local cell = nb:get_cell(cell_id)
-  if not cell or #(cell.outputs or {}) == 0 then
-    vim.notify("jupynvim: no output on this cell", vim.log.levels.INFO)
-    return
-  end
-  local expanded = Notebook.toggle_output_expanded(cell_id)
-  M._populate_buffer(nb)
-  Render.refresh(nb, vim.fn.bufwinid(buf))
-  vim.notify("jupynvim: output " .. (expanded and "expanded" or "collapsed"),
-    vim.log.levels.INFO)
+  M._sync_model(nb)
+  local cell_id = nb:cell_at_line(vim.api.nvim_win_get_cursor(0)[1])
+  return nb, cell_id and nb:get_cell(cell_id) or nil
 end
 
+local function say(msg) vim.notify("jupynvim: " .. msg, vim.log.levels.INFO) end
+
+-- Rewrite one cell's output rows when it is expanded or cut again, the way
+-- an output sync does, so the rest of the buffer and the language servers
+-- see no change. The notebook is the same, so 'modified' is too, and a
+-- buffer that matched the file still does in its new view. Rewritten
+-- plainly, it read as changed and :q refused to quit. 'modified' alone can
+-- say clean when it is not, because a repopulate resets it and TextChanged
+-- sets it back only after the keys that follow, so the text has to match as
+-- well.
+local function redraw_view(nb, cell)
+  local buf = nb.buf
+  local function text_hash()
+    return vim.fn.sha256(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+  end
+  local clean = not vim.bo[buf].modified and nb.saved_hash == text_hash()
+  M._apply_output_sync(nb, { [cell.id] = true })
+  if clean then
+    nb.saved_hash = text_hash()
+    vim.bo[buf].modified = false
+  else
+    vim.bo[buf].modified = true
+  end
+  -- a region this made shows its marker line until the render conceals it
+  local _, i = nb:get_cell(cell.id)
+  local r = i and require("jupynvim.notebook.cellmode").ranges(buf)[i]
+  if r and r.out_sep then conceal_seps(nb, r.out_sep, { Notebook.OUT_SEP }) end
+end
+
+-- Show all of the output under the cursor that the cap cut, or cut it again.
+-- With nothing cut there is nothing to do, and the message says so. It used
+-- to say "expanded" over a plot or a short print that never changed, #37.
+function M.toggle_output_expand(buf)
+  local nb, cell = cursor_cell(buf)
+  if not cell then return end
+  local cut = Notebook.output_cut(cell)
+  if not cell._output_expanded then
+    if not cut then say("nothing to expand"); return end
+    cell._output_expanded = true
+  else
+    -- once the cap cuts nothing, being expanded changes no row
+    cell._output_expanded = nil
+    if not cut then say("nothing to collapse"); return end
+  end
+  redraw_view(nb, cell)
+  say(cell._output_expanded and "output expanded" or "output collapsed")
+end
+
+-- Compatibility shim for the old name; defaults to "down" direction.
 function M.toggle_output(buf) M.enter_output(buf, "down") end
 
 -- Jump cursor to the next or previous cell that contains an image, either as

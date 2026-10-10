@@ -495,7 +495,6 @@ do
   CM = CM  -- keep luacheck quiet
   local NBm = require("jupynvim.notebook")
   NBm.max_output_lines = 500
-  NBm._output_expanded = {}
 
   local l = NBm.output_lines(cell)
   chk("output is capped to exactly max_output_lines", #l == 500, tostring(#l))
@@ -530,10 +529,10 @@ do
       after[#after]:find("line 20001", 1, true) ~= nil, after[#after])
 
   -- expanding shows everything
-  NBm.toggle_output_expanded("big")
+  cell._output_expanded = true
   chk("expand shows the full output", #NBm.output_lines(cell) > 20000,
       tostring(#NBm.output_lines(cell)))
-  NBm.toggle_output_expanded("big")
+  cell._output_expanded = nil
   chk("collapse returns to the cap", #NBm.output_lines(cell) == 500)
 
   -- 0 disables the cap entirely
@@ -562,7 +561,7 @@ do
     for i, x in ipairs(l) do if x:find("lines hidden", 1, true) then m[#m + 1] = i .. ": " .. x end end
     return m
   end
-  local function mark(s) return "  \u{22EF} " .. s .. " - <leader>no to expand" end
+  local function mark(s) return "  \u{22EF} " .. s end
 
   local l = rows(stream(printed(1000)))
   chk("1000 printed lines fill the cap exactly", #l == 500, #l .. " rows")
@@ -570,6 +569,7 @@ do
       l[126] == mark("501 lines hidden (1000 total)"), l[126])
   chk("and hides just those", l[125] == "  line 125" and l[127] == "  line 627" and l[500] == "  line 1000",
       ("%s | %s | %s"):format(l[125], l[127], tostring(l[500])))
+  chk("the marker names no key, which render adds", not l[126]:find("leader", 1, true))
 
   l = rows(stream(printed(500)))
   chk("500 printed lines fit the cap uncut", #l == 500 and #markers(l) == 0, #l .. " rows")

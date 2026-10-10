@@ -510,6 +510,24 @@ local function render_cell(nb, cell, range, geom, win, cellno, selected, editing
         priority = 5000,
       })
     end
+    -- After a marker line, the key that shows what it hides. It stays
+    -- out of the text because the undo file read back on the next open has
+    -- to match the buffer, and the keys can change in between.
+    local cfg = require("jupynvim").config
+    local K = require("jupynvim.notebook.keymaps")
+    for i in pairs(Notebook.output_marks(cell)) do
+      local row = range.out_sep + i
+      local lhs = K.lhs_for("expand_output", cfg)
+      local l = lhs and row < math.min(range.out_stop, total)
+        and vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+      if l and l:find(Notebook.OUT_TRUNC_MARK, 1, true) == 3 then
+        pcall(vim.api.nvim_buf_set_extmark, buf, nb.border_ns, row, 0, {
+          virt_text = { { (" %s to expand"):format(lhs), HL_MORE } },
+          virt_text_pos = "eol",
+          priority = 5001,
+        })
+      end
+    end
   end
 
   -- Schedule image placements for image outputs
@@ -729,7 +747,7 @@ function M.setup_highlights()
   hl(0, HL_STREAM,     { default = true, link = "Normal" })           --unused
   hl(0, HL_RESULT,     { default = true, link = "Constant" })         --unused
   hl(0, HL_OK,         { default = true, link = "DiagnosticOk" })
-  hl(0, HL_MORE,       { default = true, link = "Comment" })          --unused
+  hl(0, HL_MORE,       { default = true, link = "Comment" })
   hl(0, HL_SEPARATOR,  { default = true, link = "WinSeparator" })     --unused
   -- Output regions render as plain TEXT (mask treesitter/LSP code colors).
   -- A whole block of output drawn in the theme's plain Normal can read as
