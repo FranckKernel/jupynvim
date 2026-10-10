@@ -306,8 +306,8 @@ local function ensure_remote_binary(alias, profile)
   --   1. If the artifact we would upload is byte-identical to what we last
   --      confirmed on this alias, there is nothing to deploy and no reason to
   --      ask the remote about it. Zero round trips. The record is persisted,
-  --      so this holds across nvim restarts (which is exactly the deploy loop
-  --      in .claude/commands.md: restart nvim, reconnect).
+  --      so this holds across nvim restarts, which is exactly the deploy loop
+  --      of restarting nvim and reconnecting.
   --   2. Otherwise fold the arch probe and the marker read into ONE channel
   --      instead of two.
   --
