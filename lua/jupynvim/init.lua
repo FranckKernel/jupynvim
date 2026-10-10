@@ -2410,7 +2410,9 @@ function M.clear_outputs(buf)
       nb.cell_state[c.id] = nil
       -- Drop only code-cell output images; markdown embedded images
       -- (keys like "<id>_md_<idx>") stay so the cell still renders them.
-      for _, key in ipairs(Image.clear_outputs_for_cell(c.id)) do nb.image_ids[key] = nil end
+      for _, key in ipairs(Image.clear_outputs_for_cell(Image.output_owner(nb.buf, c.id))) do
+        nb.image_ids[key] = nil
+      end
     end
   end
   -- Outputs are REAL buffer lines (Notebook:to_lines emits them under each
@@ -2452,7 +2454,9 @@ function M.clear_cell_output(buf)
   if type(cell.metadata) == "table" then cell.metadata.execution = nil end
   nb.cell_state[cell.id] = nil
   nb.image_ids = nb.image_ids or {}
-  for _, key in ipairs(Image.clear_outputs_for_cell(cell.id)) do nb.image_ids[key] = nil end
+  for _, key in ipairs(Image.clear_outputs_for_cell(Image.output_owner(nb.buf, cell.id))) do
+    nb.image_ids[key] = nil
+  end
   -- Same as clear_outputs: the output text lives in the buffer, so the model
   -- edit only shows up once the buffer is rewritten.
   M._populate_buffer(nb, { edit = true, clear = true })

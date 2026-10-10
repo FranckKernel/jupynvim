@@ -883,13 +883,18 @@ function M.clear_for_cell(cell_id)
   placements[cell_id] = nil
 end
 
+-- The owner of a code cell's image outputs is that cell in one notebook
+-- buffer. A copied .ipynb holds the same cell ids, and owned by the id alone,
+-- hiding or clearing an output in one copy freed the other copy's image.
+function M.output_owner(buf, cell_id) return tostring(buf) .. "\31" .. tostring(cell_id) end
+
 -- Registry key of a code cell's image output, one per output. The owner is
 -- recorded rather than parsed back out of the key, because nothing stops a
 -- cell id from looking like another cell's id plus a suffix.
 local key_owner = {}
-function M.output_key(cell_id, idx)
-  local key = tostring(cell_id) .. "\31out" .. tostring(idx)
-  key_owner[key] = cell_id
+function M.output_key(owner, idx)
+  local key = tostring(owner) .. "\31out" .. tostring(idx)
+  key_owner[key] = owner
   return key
 end
 
@@ -898,13 +903,13 @@ end
 -- gone and drop the key before the image lands.
 function M.is_output_key_live(key) return key_owner[key] ~= nil end
 
--- Free the output images of `cell_id` whose keys are not in `keep` (all of
+-- Free the output images of `owner` whose keys are not in `keep` (all of
 -- them when keep is nil). Markdown images are keyed separately and stay.
 -- Returns the keys it cleared.
-function M.clear_outputs_for_cell(cell_id, keep)
+function M.clear_outputs_for_cell(owner, keep)
   local cleared = {}
-  for key, owner in pairs(key_owner) do
-    if owner == cell_id and not (keep and keep[key]) then
+  for key, o in pairs(key_owner) do
+    if o == owner and not (keep and keep[key]) then
       M.clear_for_cell(key)
       key_owner[key] = nil
       cleared[#cleared + 1] = key

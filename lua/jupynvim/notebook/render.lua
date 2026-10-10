@@ -224,7 +224,7 @@ local OUT_INDENT = "  "
 -- slot keyed by the cell, so the render kept only the first while the live
 -- path kept overwriting it with the latest. gif > png > jpeg within one
 -- output, so a bundle carrying both animates.
-local function image_outputs(cell)
+local function image_outputs(nb, cell)
   local list = {}
   for i, o in ipairs(cell.outputs or {}) do
     if o.output_type == "execute_result" or o.output_type == "display_data" then
@@ -233,7 +233,8 @@ local function image_outputs(cell)
         local v = data[m]
         if type(v) == "table" then v = table.concat(v, "") end
         if type(v) == "string" and v ~= "" then
-          list[#list + 1] = { key = image.output_key(cell.id, i), b64 = v, mime = m }
+          list[#list + 1] = { key = image.output_key(image.output_owner(nb.buf, cell.id), i),
+                              b64 = v, mime = m }
           break
         end
       end
@@ -251,7 +252,7 @@ M._image_outputs = image_outputs
 local function build_image_virt_lines(cell, width, nb, lead)
   lead = (lead or "") .. OUT_INDENT
   local rows = {}
-  for n, img in ipairs(image_outputs(cell)) do
+  for n, img in ipairs(image_outputs(nb, cell)) do
     if n > 1 then table.insert(rows, { { lead, HL_OUTPUT } }) end
     local ph = image.placeholder_virt_lines(img.key)
     if ph then
@@ -523,11 +524,11 @@ end
 -- directly at the correct screen row using Kitty's a=T (transmit-and-place).
 function M.place_images(nb, cell, range, win, gut)
   nb.image_ids = nb.image_ids or {}
-  local imgs = image_outputs(cell)
+  local imgs = image_outputs(nb, cell)
   local keep = {}
   for _, img in ipairs(imgs) do keep[img.key] = true end
   -- outputs that are gone (a re-run with fewer plots, a clear) free theirs
-  for _, key in ipairs(image.clear_outputs_for_cell(cell.id, keep)) do
+  for _, key in ipairs(image.clear_outputs_for_cell(image.output_owner(nb.buf, cell.id), keep)) do
     nb.image_ids[key] = nil
   end
   if #imgs == 0 then return end

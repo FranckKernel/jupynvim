@@ -60,7 +60,10 @@ local function open(outputs)
   return buf, p
 end
 
-local function key(i) return Image.output_key("c1", i) end
+-- the i-th output image of cell c1 in the notebook on screen
+local function key(i)
+  return Image.output_key(Image.output_owner(vim.api.nvim_get_current_buf(), "c1"), i)
+end
 local function shown(i) local p = Image._placements[key(i)]; return p and p.b64 end
 
 local function settle(want)
@@ -275,6 +278,27 @@ do
   chk("undoing the delete brings the image back", Image._placements["m1_md_1"] ~= nil)
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
   Image.clear_all()
+end
+
+-- ── two copies of one notebook ───────────────────────────────────────────
+-- A copied .ipynb keeps its original's cell ids. Images were owned by the cell
+-- id alone, so the copies shared one slot per output, and clearing the plot
+-- in one copy freed the other copy's.
+do
+  local ba, pa = open({ display(A) })
+  settle({ A })
+  local bb, pb = open({ display(B) })
+  settle({ B })
+  local b_key = key(1)
+  vim.api.nvim_set_current_buf(ba)
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  require("jupynvim").clear_cell_output(ba)
+  vim.wait(300)
+  local p = Image._placements[b_key]
+  chk("clearing the plot in one copy keeps the other copy's", p ~= nil and p.b64 == B)
+  pcall(vim.api.nvim_buf_delete, bb, { force = true })
+  os.remove(pb)
+  close(ba, pa)
 end
 
 vim.fn.delete(tmp, "rf")
