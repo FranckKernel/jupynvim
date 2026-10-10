@@ -254,10 +254,16 @@ else
 end
 
 -- Chafa renders code-cell images in terminals without Kitty graphics support,
--- but only when it is the configured renderer.
+-- but only when it is the configured renderer. The terminal running the spec
+-- is set aside too. From Ghostty or kitty its own variables made
+-- image.supported() true, and the check passed without the fix.
 if vim.fn.executable("chafa") == 1 then
-  vim.fn.executable = real_exec
+  local saved = { TERM = vim.env.TERM, TERM_PROGRAM = vim.env.TERM_PROGRAM,
+                  GHOSTTY_RESOURCES_DIR = vim.env.GHOSTTY_RESOURCES_DIR,
+                  KITTY_WINDOW_ID = vim.env.KITTY_WINDOW_ID }
   vim.env.TERM = "xterm-256color"
+  vim.env.TERM_PROGRAM, vim.env.GHOSTTY_RESOURCES_DIR, vim.env.KITTY_WINDOW_ID = nil, nil, nil
+  chk("the spec runs as a terminal without Kitty graphics", not Image.supported())
   J.setup({ log_level = "warn", image_renderer = "chafa" })
   local buf = open(write_nb({ image_cell("c1", "image/png", PNG) }))
   local p = placement(C1, 8000)
@@ -266,7 +272,7 @@ if vim.fn.executable("chafa") == 1 then
   chk("non-Kitty Chafa output contains rendered lines", lines and #lines > 0)
   close(buf)
   J.setup({ log_level = "warn", image_renderer = "placeholder" })
-  vim.env.TERM = "xterm-kitty"
+  for k, v in pairs(saved) do vim.env[k] = v end
 else
   io.write("  skip non-Kitty Chafa render: no chafa\n")
 end
