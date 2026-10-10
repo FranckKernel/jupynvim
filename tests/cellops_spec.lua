@@ -542,6 +542,75 @@ do
   NBm.max_output_lines = 500
 end
 
+-- ── 7. what the cap's marker says ────────────────────────────────────────
+-- The newline that ends a print's last line was counted as a line of its
+-- own. 1000 printed lines read "501 lines hidden (1001 total)" while 502 were
+-- hidden, and exactly 500 were cut. The trim over several outputs counted
+-- rows, so a stream's marker that hid 501 lines counted as one.
+do
+  local NBm = require("jupynvim.notebook")
+  NBm.max_output_lines = 500
+  local function printed(n, fmt)
+    local t = {}
+    for i = 1, n do t[i] = (fmt or "line %d"):format(i) .. "\n" end
+    return table.concat(t)
+  end
+  local function stream(text) return { output_type = "stream", name = "stdout", text = text } end
+  local function rows(...) return NBm.output_lines({ id = "x", cell_type = "code", outputs = { ... } }) end
+  local function markers(l)
+    local m = {}
+    for i, x in ipairs(l) do if x:find("lines hidden", 1, true) then m[#m + 1] = i .. ": " .. x end end
+    return m
+  end
+  local function mark(s) return "  \u{22EF} " .. s .. " - <leader>no to expand" end
+
+  local l = rows(stream(printed(1000)))
+  chk("1000 printed lines fill the cap exactly", #l == 500, #l .. " rows")
+  chk("the marker counts the lines it hides, of the lines printed",
+      l[126] == mark("501 lines hidden (1000 total)"), l[126])
+  chk("and hides just those", l[125] == "  line 125" and l[127] == "  line 627" and l[500] == "  line 1000",
+      ("%s | %s | %s"):format(l[125], l[127], tostring(l[500])))
+
+  l = rows(stream(printed(500)))
+  chk("500 printed lines fit the cap uncut", #l == 500 and #markers(l) == 0, #l .. " rows")
+  l = rows(stream(printed(501)))
+  chk("501 lines hide 2", #l == 500 and l[126] == mark("2 lines hidden (501 total)"), l[126])
+
+  l = rows({ output_type = "execute_result", data = { ["text/plain"] = printed(1000) } })
+  chk("a long result counts the same way", #l == 500 and l[126] == mark("501 lines hidden (1000 total)"), l[126])
+
+  local tb = {}
+  for i = 1, 20 do tb[i] = "tb " .. i end
+  l = rows(stream(printed(1000)), { output_type = "error", ename = "E", evalue = "boom", traceback = tb })
+  chk("a print then an error show one marker", #l == 500 and #markers(l) == 1, #markers(l) .. " markers")
+  chk("counting the lines the print's own marker hid", l[126] == mark("522 lines hidden (1021 total)"), l[126])
+  chk("the error's end is kept", l[500] == "  tb 20", l[500])
+
+  -- Blank lines at the very end never show, so they are not lines to count.
+  l = rows(stream(printed(600) .. string.rep("\n", 400)))
+  chk("trailing blank lines with nothing after them are not counted",
+      #l == 500 and l[126] == mark("101 lines hidden (600 total)") and l[500] == "  line 600",
+      ("%s | %s"):format(l[126], tostring(l[500])))
+  l = rows(stream(printed(1000) .. "\n"))
+  chk("nor is the blank line a closing print() leaves", l[126] == mark("501 lines hidden (1000 total)"), l[126])
+  l = rows(stream(printed(1000) .. "\n\n"), { output_type = "execute_result", data = { ["text/plain"] = "x" } })
+  chk("blank lines with more output after them show, and count",
+      #l == 500 and l[126] == mark("504 lines hidden (1003 total)")
+      and l[498] == "  " and l[499] == "  " and l[500] == "  x",
+      ("%s | %q %q %q"):format(l[126], tostring(l[498]), tostring(l[499]), tostring(l[500])))
+
+  l = rows(stream(printed(10, "pre %d")), stream(printed(1000)))
+  chk("a short print before a long one", #l == 500 and #markers(l) == 1
+      and l[126] == mark("511 lines hidden (1010 total)"), table.concat(markers(l), " / "))
+
+  NBm.max_output_lines = 2
+  l = rows(stream(printed(3)))
+  chk("a cap under 3 never hides a single line behind a marker", #l == 3 and #markers(l) == 0, #l .. " rows")
+  l = rows(stream(printed(4)))
+  chk("and says 2 hidden when it cuts", #l == 3 and l[2] == mark("2 lines hidden (4 total)"), l[2])
+  NBm.max_output_lines = 500
+end
+
 if fails == 0 then
   io.write("\nALL CELL-OPS CHECKS PASSED\n")
 else

@@ -109,6 +109,12 @@ local function _out_key(cell)
   return table.concat(p, ",")
 end
 
+-- A marker line in place of the lines the cap hides.
+local function trunc_marker(hidden, total)
+  return string.format("  %s %d lines hidden (%d total) - <leader>no to expand",
+    M.OUT_TRUNC_MARK, hidden, total)
+end
+
 function M.output_lines(cell)
   local key = _out_key(cell)
   local hit = _ol_cache[cell]
@@ -117,7 +123,47 @@ function M.output_lines(cell)
   -- would keep displaying its result even though the kernel returned a new one.
   if hit and hit.outputs == cell.outputs and hit.key == key then return hit.lines end
 
+  local cap = not M._output_expanded[cell.id] and M.max_output_lines or nil
+  local head, tail, fit
+  if cap and cap > 0 then
+    head = math.max(1, math.floor(cap / 4))
+    tail = math.max(1, cap - head - 1)   -- -1: the marker occupies a line
+    fit = head + tail + 1                -- the cap, or 3 when it is below 3
+  end
+
+  local outputs = cell.outputs or {}
   local lines = {}
+  local hides = {}   -- row of a stream's marker -> the lines it hides
+  -- The text an execute_result or display_data shows. A figure's repr stays
+  -- hidden behind its image.
+  local function result_text(o)
+    local data = o.data or {}
+    local text = _as_str(data["text/plain"])
+    if (data["image/png"] or data["image/gif"] or data["image/jpeg"])
+        and (text == "" or text:match("^<[Ff]igure ")
+             or text:match("^<[%w._]+ object>$")
+             or text:match("^<[%w._]+ object at 0x[%x]+>$")) then
+      return ""
+    end
+    return text
+  end
+  -- Does any output after the i-th show more than blank lines? Blank rows at
+  -- the very end are dropped, so without one a stream's trailing blank lines
+  -- never show, and its marker must not count them.
+  local function more_after(i)
+    for j = i + 1, #outputs do
+      local o, t = outputs[j], ""
+      if o.output_type == "stream" then
+        t = _as_str(o.text)
+      elseif o.output_type == "execute_result" or o.output_type == "display_data" then
+        t = result_text(o)
+      elseif o.output_type == "error" then
+        t = _as_str(o.ename) .. _as_str(o.evalue) .. table.concat(vim.tbl_map(_as_str, o.traceback or {}))
+      end
+      if t:find("%S") and (not t:find("\27", 1, true) or _strip_ansi(t):find("%S")) then return true end
+    end
+    return false
+  end
   local function add_text(text)
     for _, l in ipairs(vim.split(text, "\n", { plain = true })) do
       if l:find("data:image/%w+;base64,") then
@@ -131,40 +177,34 @@ function M.output_lines(cell)
   -- expensive passes. _process_cr and _strip_ansi each walk the whole string,
   -- so running them over 420KB to emit 500 lines cost 17ms of the 23ms.
   -- Neither changes the line count, so slicing first is equivalent.
-  local cap = M.max_output_lines
-  local function add_stream(text)
-    if not (cap and cap > 0) or M._output_expanded[cell.id] then
+  local function add_stream(text, at)
+    if not fit then
       add_text(_strip_ansi(_process_cr(text))); return
     end
     local raw = vim.split(text, "\n", { plain = true })
-    if #raw <= cap then
+    local function row_text(i) return _strip_ansi(_process_cr((raw[i]:gsub("\r$", "")))) end
+    -- The newline that ends the last line starts no line of its own. Counted
+    -- as one, a 1000-line print read "1001 total", took a row of the tail
+    -- and hid one line more than it said.
+    if #raw > 1 and raw[#raw] == "" then raw[#raw] = nil end
+    if #raw > fit and not more_after(at) then
+      while #raw > 0 and row_text(#raw) == "" do raw[#raw] = nil end
+    end
+    if #raw <= fit then
       add_text(_strip_ansi(_process_cr(text))); return
     end
-    local head = math.max(1, math.floor(cap / 4))
-    local tail = math.max(1, cap - head - 1)   -- -1: the marker occupies a line
-    local function emit(i)
-      local l = raw[i]:gsub("\r$", "")
-      add_text(_strip_ansi(_process_cr(l)))
-    end
+    local function emit(i) add_text(row_text(i)) end
     for i = 1, head do emit(i) end
-    table.insert(lines, string.format(
-      "  %s %d lines hidden (%d total) - <leader>no to expand",
-      M.OUT_TRUNC_MARK, #raw - cap, #raw))
+    table.insert(lines, trunc_marker(#raw - head - tail, #raw))
+    hides[#lines] = #raw - head - tail
     for i = #raw - tail + 1, #raw do emit(i) end
   end
 
-  for _, o in ipairs(cell.outputs or {}) do
+  for i, o in ipairs(outputs) do
     if o.output_type == "stream" then
-      add_stream(_as_str(o.text))
+      add_stream(_as_str(o.text), i)
     elseif o.output_type == "execute_result" or o.output_type == "display_data" then
-      local data = o.data or {}
-      local has_img = data["image/png"] or data["image/gif"] or data["image/jpeg"]
-      local text = _as_str(data["text/plain"])
-      if has_img and (text == "" or text:match("^<[Ff]igure ")
-          or text:match("^<[%w._]+ object>$")
-          or text:match("^<[%w._]+ object at 0x[%x]+>$")) then
-        text = ""
-      end
+      local text = result_text(o)
       if text ~= "" then add_text(text) end
     elseif o.output_type == "error" then
       local msg = _as_str(o.ename) .. ": " .. _as_str(o.evalue)
@@ -176,16 +216,23 @@ function M.output_lines(cell)
   end
   while lines[#lines] == "  " or lines[#lines] == "" do table.remove(lines) end
 
+  -- How many lines rows a..b stand for. A row is one line, and a stream's
+  -- marker is every line it hides. Counted as rows, a marker that hid most
+  -- of a stream was one line.
+  local function count(a, b)
+    local n = math.max(0, b - a + 1)
+    for row, k in pairs(hides) do
+      if row >= a and row <= b then n = n + k - 1 end
+    end
+    return n
+  end
+
   -- Anything still over the cap (many outputs, or non-stream) is trimmed here,
   -- keeping BOTH ends: for a training log the final epochs are the point.
-  if cap and cap > 0 and not M._output_expanded[cell.id] and #lines > cap then
-    local head = math.max(1, math.floor(cap / 4))
-    local tail = math.max(1, cap - head - 1)   -- -1: the marker occupies a line
+  if fit and #lines > fit then
     local shown = {}
     for k = 1, head do shown[#shown + 1] = lines[k] end
-    shown[#shown + 1] = string.format(
-      "  %s %d lines hidden (%d total) - <leader>no to expand",
-      M.OUT_TRUNC_MARK, #lines - cap, #lines)
+    shown[#shown + 1] = trunc_marker(count(head + 1, #lines - tail), count(1, #lines))
     for k = #lines - tail + 1, #lines do shown[#shown + 1] = lines[k] end
     lines = shown
   end
