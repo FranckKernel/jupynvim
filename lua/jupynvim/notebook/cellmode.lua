@@ -853,6 +853,8 @@ function M.attach(buf, api)
 		K = vim.tbl_extend("force", K, user_keys)
 	end
 
+	print("The keys are : " .. vim.inspect(K.up) .. vim.inspect(K.down) .. vim.inspect(K.edit))
+
 	cmdmap(K.down, function() M.move_selection(buf, 1) end, "jupynvim: next cell", edit_down)
 	cmdmap(K.up, function() M.move_selection(buf, -1) end, "jupynvim: prev cell", edit_up)
 
